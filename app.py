@@ -356,9 +356,11 @@ def dashboard():
             order["_cost"]      = cost
             order["_ship_date"] = ship_date[:10] if ship_date else ""
 
-            if order["orderStatus"] == "shipped" and ship_date:
+            if order["orderStatus"] == "shipped":
+                # Prefer shipment ship_date, fall back to order modifyDate
+                date_str = ship_date or order.get("modifyDate", "")
                 try:
-                    sd = datetime.fromisoformat(ship_date[:19]).replace(tzinfo=timezone.utc)
+                    sd = datetime.fromisoformat(date_str[:19]).replace(tzinfo=timezone.utc)
                     if sd <= cutoff:
                         archived.append(order)
                         continue
