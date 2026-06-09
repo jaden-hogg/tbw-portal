@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
 import re
@@ -17,16 +18,20 @@ from flask import (
 
 app = Flask(__name__)
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
-app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB for multi-file uploads
 
-PORTAL_PASSWORD = os.environ["PORTAL_PASSWORD"]
-SS_KEY          = os.environ["SHIPSTATION_V1_API_KEY"]
-SS_SECRET       = os.environ["SHIPSTATION_V1_API_SECRET"]
-SS_BASE         = "https://ssapi.shipstation.com"
-CUSTOMER_EMAIL  = "tyler@thebuffaloworks.com"
+PORTAL_PASSWORD   = os.environ["PORTAL_PASSWORD"]
+SS_KEY            = os.environ["SHIPSTATION_V1_API_KEY"]
+SS_SECRET         = os.environ["SHIPSTATION_V1_API_SECRET"]
+SS_BASE           = "https://ssapi.shipstation.com"
+CUSTOMER_EMAIL    = "tyler@thebuffaloworks.com"
+CLD_CLOUD         = os.environ["CLOUDINARY_CLOUD_NAME"]
+CLD_API_KEY       = os.environ["CLOUDINARY_API_KEY"]
+CLD_API_SECRET    = os.environ["CLOUDINARY_API_SECRET"]
+CLD_UPLOAD_URL    = f"https://api.cloudinary.com/v1_1/{CLD_CLOUD}/auto/upload"
 
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 def login_required(f):
     @wraps(f)
@@ -37,7 +42,36 @@ def login_required(f):
     return decorated
 
 
-# ── ShipStation helpers ───────────────────────────────────────────────────────
+# ── Cloudinary ────────────────────────────────────────────────────────────────
+
+def cloudinary_upload(file_bytes: bytes, filename: str, folder: str) -> str:
+    """Upload a file to Cloudinary and return its secure URL."""
+    timestamp = str(int(time.time()))
+    public_id = f"{folder}/{filename}"
+
+    # Build signed upload params
+    params = {
+        "folder":     folder,
+        "public_id":  public_id,
+        "timestamp":  timestamp,
+        "use_filename": "true",
+        "unique_filename": "false",
+    }
+    # Signature: sorted param string + api_secret
+    sig_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + CLD_API_SECRET
+    signature = hashlib.sha256(sig_str.encode()).hexdigest()
+
+    resp = requests.post(
+        CLD_UPLOAD_URL,
+        data={**params, "api_key": CLD_API_KEY, "signature": signature},
+        files={"file": (filename, file_bytes)},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()["secure_url"]
+
+
+# ── ShipStation ───────────────────────────────────────────────────────────────
 
 def ss_get(path: str, params: dict | None = None) -> dict:
     r = requests.get(
@@ -69,7 +103,6 @@ def ss_post(path: str, payload: dict) -> dict:
 
 
 def fetch_tracking(order_id: int) -> tuple[int, str, str]:
-    """Return (order_id, tracking_number, carrier_code) for a shipped order."""
     try:
         data = ss_get("/shipments", {"orderId": order_id, "pageSize": 5})
         for s in data.get("shipments", []):
@@ -80,14 +113,13 @@ def fetch_tracking(order_id: int) -> tuple[int, str, str]:
     return order_id, "", ""
 
 
-# ── PDF parsing ───────────────────────────────────────────────────────────────
+# ── PDF parsing (address only) ────────────────────────────────────────────────
 
-def parse_po_pdf(pdf_bytes: bytes) -> dict:
+def parse_address_from_pdf(pdf_bytes: bytes) -> dict:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     text = "\n".join(page.get_text() for page in doc)
 
     result: dict = {
-        "po_number":    None,
         "ship_name":    None,
         "ship_street1": None,
         "ship_street2": None,
@@ -95,62 +127,36 @@ def parse_po_pdf(pdf_bytes: bytes) -> dict:
         "ship_state":   None,
         "ship_zip":     None,
         "ship_country": "US",
-        "qty_15oz":     0,
-        "qty_11oz":     0,
     }
 
-    # PO number — label appears before value in the PDF layout
-    m = re.search(r'PO NUMBER:[^\d]*(\d+)', text)
-    if m:
-        result["po_number"] = m.group(1).strip()
-
-    # Ship-to address block
     addr_match = re.search(
         r'(?:ship\s*to)\s*[:\n](.*?)(?:\n{2,}|\Z)',
         text, re.IGNORECASE | re.DOTALL,
     )
-    if addr_match:
-        block = addr_match.group(1)
-        lines = [l.strip() for l in block.splitlines() if l.strip()]
-        addr_lines = []
-        for line in lines:
-            if re.match(r'^(?:Terms|Product ID|Description|Qty|Pric|Net \d+)', line, re.IGNORECASE):
-                break
-            addr_lines.append(line)
-        if addr_lines:
-            result["ship_name"] = addr_lines[0]
-        if len(addr_lines) >= 2:
-            result["ship_street1"] = addr_lines[1]
-        for line in addr_lines[2:]:
-            csz = re.match(r'^(.*?),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$', line)
-            if csz:
-                result["ship_city"]  = csz.group(1).strip()
-                result["ship_state"] = csz.group(2)
-                result["ship_zip"]   = csz.group(3)
-                break
-            elif not result["ship_street2"] and not re.search(r'\d{5}', line):
-                result["ship_street2"] = line
+    if not addr_match:
+        return result
 
-    # SKU quantities — handles "QUIP 11oz B&W: 12", "TBW 15oz WH: 48", "11oz B&W - 144"
-    notes_match = re.search(
-        r'additional\s+notes?\s*[:\n](.*?)(?:\n{2,}|\Z)',
-        text, re.IGNORECASE | re.DOTALL,
-    )
-    search_area = notes_match.group(1) if notes_match else text
+    block = addr_match.group(1)
+    lines = [l.strip() for l in block.splitlines() if l.strip()]
+    addr_lines = []
+    for line in lines:
+        if re.match(r'^(?:Terms|Product ID|Description|Qty|Pric|Net \d+)', line, re.IGNORECASE):
+            break
+        addr_lines.append(line)
 
-    def sum_qty(area: str, oz: int) -> int:
-        return sum(
-            int(m.group(1))
-            for m in re.finditer(rf'\b{oz}\s*oz\b[^:\-\n]*[:\-]\s*(\d+)', area, re.IGNORECASE)
-        )
-
-    result["qty_15oz"] = sum_qty(search_area, 15)
-    result["qty_11oz"] = sum_qty(search_area, 11)
-    # Fall back to full text if notes section had nothing
-    if result["qty_15oz"] == 0 and notes_match:
-        result["qty_15oz"] = sum_qty(text, 15)
-    if result["qty_11oz"] == 0 and notes_match:
-        result["qty_11oz"] = sum_qty(text, 11)
+    if addr_lines:
+        result["ship_name"] = addr_lines[0]
+    if len(addr_lines) >= 2:
+        result["ship_street1"] = addr_lines[1]
+    for line in addr_lines[2:]:
+        csz = re.match(r'^(.*?),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$', line)
+        if csz:
+            result["ship_city"]  = csz.group(1).strip()
+            result["ship_state"] = csz.group(2)
+            result["ship_zip"]   = csz.group(3)
+            break
+        elif not result["ship_street2"] and not re.search(r'\d{5}', line):
+            result["ship_street2"] = line
 
     return result
 
@@ -183,27 +189,68 @@ def index():
 @app.route("/upload", methods=["POST"])
 @login_required
 def upload():
-    f = request.files.get("po_file")
-    if not f or not f.filename.lower().endswith(".pdf"):
-        flash("Please upload a PDF file.", "danger")
+    po_number = request.form.get("po_number", "").strip()
+    qty_15oz  = request.form.get("qty_15oz", "0").strip()
+    qty_11oz  = request.form.get("qty_11oz", "0").strip()
+    files     = request.files.getlist("files")
+
+    if not po_number:
+        flash("PO number is required.", "danger")
         return redirect(url_for("index"))
 
     try:
-        parsed = parse_po_pdf(f.read())
-    except Exception as e:
-        flash(f"Failed to parse PDF: {e}", "danger")
+        qty_15oz = int(qty_15oz) if qty_15oz else 0
+        qty_11oz = int(qty_11oz) if qty_11oz else 0
+    except ValueError:
+        flash("Quantities must be whole numbers.", "danger")
         return redirect(url_for("index"))
 
-    if not parsed["po_number"]:
-        flash("Could not find a PO number in the PDF.", "danger")
+    if qty_15oz == 0 and qty_11oz == 0:
+        flash("Enter a quantity for at least one SKU.", "danger")
         return redirect(url_for("index"))
 
-    if parsed["qty_15oz"] == 0 and parsed["qty_11oz"] == 0:
-        flash("Could not read SKU quantities from the PDF. Please contact support.", "danger")
+    if not files or all(f.filename == "" for f in files):
+        flash("Please attach at least one file.", "danger")
         return redirect(url_for("index"))
 
-    session["pending_order"] = parsed
-    return render_template("preview.html", parsed=parsed)
+    # Upload files to Cloudinary and parse address from any PO PDF
+    folder = f"tbw-orders/PO-{po_number}"
+    file_urls: list[tuple[str, str]] = []  # (filename, url)
+    address: dict = {}
+
+    for f in files:
+        if not f.filename:
+            continue
+        file_bytes = f.read()
+
+        # Parse address from the purchase order PDF
+        if not address and "purchase order" in f.filename.lower() and f.filename.lower().endswith(".pdf"):
+            try:
+                address = parse_address_from_pdf(file_bytes)
+            except Exception:
+                pass
+
+        try:
+            url = cloudinary_upload(file_bytes, f.filename, folder)
+            file_urls.append((f.filename, url))
+        except Exception as e:
+            flash(f"Failed to upload {f.filename}: {e}", "danger")
+            return redirect(url_for("index"))
+
+    session["pending_order"] = {
+        "po_number":    po_number,
+        "qty_15oz":     qty_15oz,
+        "qty_11oz":     qty_11oz,
+        "ship_name":    address.get("ship_name"),
+        "ship_street1": address.get("ship_street1"),
+        "ship_street2": address.get("ship_street2"),
+        "ship_city":    address.get("ship_city"),
+        "ship_state":   address.get("ship_state"),
+        "ship_zip":     address.get("ship_zip"),
+        "ship_country": address.get("ship_country", "US"),
+        "file_urls":    file_urls,
+    }
+    return render_template("preview.html", parsed=session["pending_order"])
 
 
 @app.route("/confirm", methods=["POST"])
@@ -211,7 +258,7 @@ def upload():
 def confirm():
     parsed = session.pop("pending_order", None)
     if not parsed:
-        flash("Session expired — please re-upload the PO.", "warning")
+        flash("Session expired — please re-upload.", "warning")
         return redirect(url_for("index"))
 
     po_number = parsed["po_number"]
@@ -240,6 +287,12 @@ def confirm():
         "residential": False,
     }
 
+    # Build notes with file links
+    file_lines = " | ".join(
+        f"[{name}] {url}" for name, url in parsed.get("file_urls", [])
+    )
+    notes = f"PO {po_number} | {file_lines}" if file_lines else f"PO {po_number}"
+
     payload = {
         "orderNumber":    f"TBW-{po_number}",
         "orderDate":      now,
@@ -251,7 +304,7 @@ def confirm():
         "amountPaid":     0.00,
         "taxAmount":      0.00,
         "shippingAmount": 0.00,
-        "internalNotes":  f"Submitted via TBW Portal | PO {po_number}",
+        "internalNotes":  notes,
     }
 
     try:
@@ -280,7 +333,6 @@ def dashboard():
         })
         orders = data.get("orders", [])
 
-        # Fetch tracking numbers for shipped orders in parallel
         shipped_ids = [o["orderId"] for o in orders if o["orderStatus"] == "shipped"]
         tracking: dict[int, tuple[str, str]] = {}
         if shipped_ids:
