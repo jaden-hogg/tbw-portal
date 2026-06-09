@@ -7,7 +7,7 @@ import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 import fitz
@@ -97,15 +97,23 @@ def ss_post(path: str, payload: dict) -> dict:
     raise RuntimeError("ShipStation rate limit exceeded after 3 retries")
 
 
-def fetch_tracking(order_id: int) -> tuple[int, str, str]:
+def fetch_shipment_info(order_id: int) -> tuple[int, str, str, float, str]:
+    """Return (order_id, tracking, carrier, cost_with_markup, ship_date)."""
     try:
         data = ss_get("/shipments", {"orderId": order_id, "pageSize": 5})
         for s in data.get("shipments", []):
             if not s.get("voided") and s.get("trackingNumber"):
-                return order_id, s["trackingNumber"], s.get("carrierCode", "")
+                raw_cost = float(s.get("shipmentCost") or 0)
+                return (
+                    order_id,
+                    s.get("trackingNumber", ""),
+                    s.get("carrierCode", ""),
+                    round(raw_cost * 1.2, 2),
+                    s.get("shipDate", ""),
+                )
     except Exception:
         pass
-    return order_id, "", ""
+    return order_id, "", "", 0.0, ""
 
 
 # ── PDF parsing (address only) ────────────────────────────────────────────────
@@ -321,34 +329,48 @@ def confirm():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    orders = []
+    active: list[dict] = []
+    archived: list[dict] = []
     try:
         data = ss_get("/orders", {
             "customerEmail": CUSTOMER_EMAIL,
-            "pageSize": 100,
+            "pageSize": 500,
             "sortBy": "OrderDate",
             "sortDir": "DESC",
         })
-        orders = data.get("orders", [])
+        orders = [o for o in data.get("orders", []) if o.get("orderNumber", "").startswith("TBW-")]
 
         shipped_ids = [o["orderId"] for o in orders if o["orderStatus"] == "shipped"]
-        tracking: dict[int, tuple[str, str]] = {}
+        shipment_info: dict[int, tuple[str, str, float, str]] = {}
         if shipped_ids:
             with ThreadPoolExecutor(max_workers=10) as ex:
-                futures = {ex.submit(fetch_tracking, oid): oid for oid in shipped_ids}
+                futures = {ex.submit(fetch_shipment_info, oid): oid for oid in shipped_ids}
                 for future in as_completed(futures):
-                    oid, tn, carrier = future.result()
-                    tracking[oid] = (tn, carrier)
+                    oid, tn, carrier, cost, ship_date = future.result()
+                    shipment_info[oid] = (tn, carrier, cost, ship_date)
 
+        cutoff = datetime.now(timezone.utc) - timedelta(days=10)
         for order in orders:
-            tn, carrier = tracking.get(order["orderId"], ("", ""))
-            order["_tracking"] = tn
-            order["_carrier"]  = carrier
+            tn, carrier, cost, ship_date = shipment_info.get(order["orderId"], ("", "", 0.0, ""))
+            order["_tracking"]  = tn
+            order["_carrier"]   = carrier
+            order["_cost"]      = cost
+            order["_ship_date"] = ship_date[:10] if ship_date else ""
+
+            if order["orderStatus"] == "shipped" and ship_date:
+                try:
+                    sd = datetime.fromisoformat(ship_date[:19]).replace(tzinfo=timezone.utc)
+                    if sd <= cutoff:
+                        archived.append(order)
+                        continue
+                except Exception:
+                    pass
+            active.append(order)
 
     except Exception as e:
         flash(f"Could not load orders: {e}", "danger")
 
-    return render_template("dashboard.html", orders=orders)
+    return render_template("dashboard.html", active=active, archived=archived)
 
 
 if __name__ == "__main__":
