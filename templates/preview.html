@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-sm-8 col-md-6">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h5 class="card-title mb-4">Review Order — PO <code>{{ parsed.po_number }}</code></h5>
+
+        <h6 class="text-uppercase small text-muted mb-2">Ship To</h6>
+        <address class="mb-4 ps-1">
+          <strong>{{ parsed.ship_name or '—' }}</strong><br>
+          {{ parsed.ship_street1 or '' }}
+          {% if parsed.ship_street2 %}<br>{{ parsed.ship_street2 }}{% endif %}<br>
+          {{ parsed.ship_city or '' }}{% if parsed.ship_city %}, {% endif %}{{ parsed.ship_state or '' }} {{ parsed.ship_zip or '' }}
+        </address>
+
+        <h6 class="text-uppercase small text-muted mb-2">Items</h6>
+        <table class="table table-sm mb-4">
+          <thead class="table-light">
+            <tr><th>SKU</th><th class="text-end">Qty</th></tr>
+          </thead>
+          <tbody>
+            {% if parsed.qty_15oz > 0 %}
+            <tr><td>TBW-15oz</td><td class="text-end">{{ parsed.qty_15oz }}</td></tr>
+            {% endif %}
+            {% if parsed.qty_11oz > 0 %}
+            <tr><td>TBW-11oz</td><td class="text-end">{{ parsed.qty_11oz }}</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+
+        <div class="d-flex gap-2">
+          <form method="post" action="{{ url_for('confirm') }}" class="flex-grow-1">
+            <button type="submit" class="btn btn-success w-100">Confirm &amp; Submit</button>
+          </form>
+          <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">Re-upload</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

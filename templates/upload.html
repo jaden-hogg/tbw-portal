@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-sm-8 col-md-6">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h5 class="card-title mb-1">Submit Purchase Order</h5>
+        <p class="text-muted small mb-4">Upload your PDF purchase order. We'll parse the details and ask you to confirm before submitting.</p>
+        <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+          <div class="mb-4">
+            <label class="form-label fw-medium">Purchase Order PDF</label>
+            <input type="file" name="po_file" class="form-control" accept=".pdf" required>
+          </div>
+          <button type="submit" class="btn btn-dark w-100">Parse Order</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

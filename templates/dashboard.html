@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h4 class="mb-0">Orders</h4>
+  <a href="{{ url_for('index') }}" class="btn btn-dark btn-sm">+ New Order</a>
+</div>
+
+{% if orders %}
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Order #</th>
+          <th>Date</th>
+          <th>Ship To</th>
+          <th>Items</th>
+          <th>Status</th>
+          <th>Tracking</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for order in orders %}
+        <tr>
+          <td><code>{{ order.orderNumber }}</code></td>
+          <td class="text-nowrap">{{ order.orderDate[:10] }}</td>
+          <td>
+            {{ order.shipTo.name }}<br>
+            <small class="text-muted">{{ order.shipTo.city }}{% if order.shipTo.city and order.shipTo.state %}, {% endif %}{{ order.shipTo.state }}</small>
+          </td>
+          <td>
+            {% for item in order.items %}
+              <small class="text-nowrap">{{ item.sku }} &times; {{ item.quantity }}</small>{% if not loop.last %}<br>{% endif %}
+            {% endfor %}
+          </td>
+          <td class="text-nowrap">
+            {% set s = order.orderStatus %}
+            {% if s == 'shipped' %}
+              <span class="badge bg-success">Shipped</span>
+            {% elif s == 'awaiting_shipment' %}
+              <span class="badge bg-warning text-dark">Awaiting Shipment</span>
+            {% elif s == 'on_hold' %}
+              <span class="badge bg-secondary">On Hold</span>
+            {% elif s == 'cancelled' %}
+              <span class="badge bg-danger">Cancelled</span>
+            {% else %}
+              <span class="badge bg-light text-dark">{{ s }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if order._tracking %}
+              {% set t = order._tracking %}
+              {% set c = order._carrier | lower %}
+              {% if 'fedex' in c %}
+                <a href="https://www.fedex.com/apps/fedextrack/?tracknumbers={{ t }}" target="_blank" class="small">{{ t }}</a>
+              {% elif 'ups' in c %}
+                <a href="https://www.ups.com/track?tracknum={{ t }}" target="_blank" class="small">{{ t }}</a>
+              {% elif 'stamps' in c or 'usps' in c %}
+                <a href="https://tools.usps.com/go/TrackConfirmAction?tLabels={{ t }}" target="_blank" class="small">{{ t }}</a>
+              {% else %}
+                <span class="small">{{ t }}</span>
+              {% endif %}
+            {% else %}
+              <span class="text-muted small">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<p class="text-muted">No orders found.</p>
+{% endif %}
+{% endblock %}
