@@ -333,11 +333,12 @@ def dashboard():
     archived: list[dict] = []
     try:
         data = ss_get("/orders", {
+            "orderNumber": "TBW",
             "pageSize": 500,
             "sortBy": "OrderDate",
             "sortDir": "DESC",
         })
-        orders = [o for o in data.get("orders", []) if "TBW" in o.get("orderNumber", "").upper()]
+        orders = data.get("orders", [])
 
         shipped_ids = [o["orderId"] for o in orders if o["orderStatus"] == "shipped"]
         shipment_info: dict[int, tuple[str, str, float, str]] = {}
