@@ -2,32 +2,32 @@
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-sm-9 col-md-7">
-    <div class="card shadow-sm">
+    <div class="card">
       <div class="card-body p-4">
-        <h5 class="card-title mb-1">Submit Purchase Order</h5>
-        <p class="text-muted small mb-4">Fill in the PO details and attach all order files. Files will be uploaded to Cloudinary and linked in ShipStation.</p>
+        <div class="card-title mb-1">New Order</div>
+        <p class="text-muted small mb-4">Enter PO details and attach all order files. Files are uploaded to Cloudinary and linked in ShipStation.</p>
         <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
 
           <div class="mb-3">
-            <label class="form-label fw-medium">PO Number</label>
+            <label class="form-label fw-semibold">PO Number</label>
             <input type="text" name="po_number" class="form-control" placeholder="e.g. 105641" required autofocus>
           </div>
 
           <div class="row mb-3">
             <div class="col">
-              <label class="form-label fw-medium">15oz Qty</label>
+              <label class="form-label fw-semibold">15oz Qty</label>
               <input type="number" name="qty_15oz" class="form-control" min="0" value="0">
             </div>
             <div class="col">
-              <label class="form-label fw-medium">11oz Qty</label>
+              <label class="form-label fw-semibold">11oz Qty</label>
               <input type="number" name="qty_11oz" class="form-control" min="0" value="0">
             </div>
           </div>
 
           <div class="mb-4">
-            <label class="form-label fw-medium">Files</label>
+            <label class="form-label fw-semibold">Files</label>
             <input type="file" name="files" class="form-control" multiple required>
-            <div class="form-text">Attach box labels, art transfers, packing slip, PO, and thumbnails.</div>
+            <div class="form-text">Box labels, art transfers, packing slip, PO, thumbnails.</div>
           </div>
 
           <button type="submit" class="btn btn-dark w-100">Upload &amp; Preview</button>

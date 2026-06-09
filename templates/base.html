@@ -5,27 +5,138 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TBW Order Portal</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Montserrat:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    body { background: #f5f5f5; }
-    .navbar { border-bottom: 1px solid rgba(255,255,255,.1); }
-    code { color: #495057; background: #e9ecef; padding: 2px 5px; border-radius: 3px; font-size: .9em; }
+    :root {
+      --hogg-navy:  #182e49;
+      --hogg-frost: #edf0f3;
+      --hogg-cream: #fbf3f0;
+      --hogg-sunset:#f0a955;
+      --hogg-onyx:  #101010;
+    }
+
+    body {
+      background: var(--hogg-frost);
+      color: var(--hogg-onyx);
+      font-family: 'Montserrat', sans-serif;
+      font-size: .9rem;
+    }
+
+    /* ── Navbar ── */
+    .navbar {
+      background: var(--hogg-navy) !important;
+      padding: .75rem 0;
+    }
+    .navbar-brand {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 1.5rem;
+      letter-spacing: .05em;
+      color: #fff !important;
+    }
+    .navbar .btn-outline-light {
+      border-color: rgba(255,255,255,.35);
+      color: rgba(255,255,255,.85);
+      font-size: .8rem;
+      font-weight: 600;
+    }
+    .navbar .btn-outline-light:hover {
+      background: rgba(255,255,255,.12);
+      border-color: rgba(255,255,255,.6);
+      color: #fff;
+    }
+
+    /* ── Cards ── */
+    .card {
+      border: none;
+      border-radius: 10px;
+      box-shadow: 0 2px 12px rgba(24,46,73,.08);
+    }
+    .card-title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 1.4rem;
+      letter-spacing: .04em;
+      color: var(--hogg-navy);
+    }
+
+    /* ── Page heading ── */
+    h4 {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 1.6rem;
+      letter-spacing: .05em;
+      color: var(--hogg-navy);
+    }
+
+    /* ── Buttons ── */
+    .btn-dark {
+      background: var(--hogg-navy);
+      border-color: var(--hogg-navy);
+      font-weight: 600;
+      letter-spacing: .03em;
+    }
+    .btn-dark:hover {
+      background: #0f1e30;
+      border-color: #0f1e30;
+    }
+    .btn-success {
+      background: var(--hogg-navy);
+      border-color: var(--hogg-navy);
+      font-weight: 600;
+    }
+    .btn-success:hover {
+      background: #0f1e30;
+      border-color: #0f1e30;
+    }
+
+    /* ── Badges ── */
+    .badge.bg-warning  { background: var(--hogg-sunset) !important; color: #fff !important; }
+    .badge.bg-success  { background: #2a7d4f !important; }
+
+    /* ── Table ── */
+    .table thead.table-light th {
+      background: var(--hogg-frost);
+      color: var(--hogg-navy);
+      font-weight: 600;
+      font-size: .78rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      border-bottom: 2px solid #d5dce6;
+    }
+    .table-hover tbody tr:hover { background: #f0f4f8; }
+
+    /* ── Section labels ── */
+    .section-label {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 1rem;
+      letter-spacing: .1em;
+      color: var(--hogg-navy);
+      opacity: .6;
+      text-transform: uppercase;
+    }
+
+    code {
+      color: var(--hogg-navy);
+      background: #dde6ef;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: .85em;
+    }
   </style>
 </head>
 <body>
-  <nav class="navbar navbar-dark bg-dark mb-4">
+  <nav class="navbar mb-4">
     <div class="container">
-      <span class="navbar-brand fw-semibold">TBW Order Portal</span>
+      <span class="navbar-brand">TBW Order Portal</span>
       {% if session.get('logged_in') %}
       <div class="d-flex gap-2">
         <a href="{{ url_for('index') }}" class="btn btn-outline-light btn-sm">New Order</a>
         <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm">Dashboard</a>
-        <a href="{{ url_for('logout') }}" class="btn btn-outline-secondary btn-sm">Logout</a>
+        <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm">Logout</a>
       </div>
       {% endif %}
     </div>
   </nav>
 
-  <div class="container pb-5" style="max-width: 960px;">
+  <div class="container pb-5" style="max-width: 1000px;">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% for category, message in messages %}
         <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
