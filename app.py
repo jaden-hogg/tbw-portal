@@ -214,7 +214,7 @@ def upload():
         return redirect(url_for("index"))
 
     # Upload files to Cloudinary and parse address from any PO PDF
-    folder = f"tbw-orders/PO-{po_number}"
+    folder = f"TBW-Orders/PO-{po_number}"
     file_urls: list[tuple[str, str]] = []  # (filename, url)
     address: dict = {}
 
