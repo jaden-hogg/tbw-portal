@@ -29,7 +29,7 @@
             <small class="text-muted">{{ order.shipTo.city }}{% if order.shipTo.city and order.shipTo.state %}, {% endif %}{{ order.shipTo.state }}</small>
           </td>
           <td>
-            {% for item in order.items %}
+            {% for item in order['items'] %}
               <small class="text-nowrap">{{ item.sku }} &times; {{ item.quantity }}</small>{% if not loop.last %}<br>{% endif %}
             {% endfor %}
           </td>
