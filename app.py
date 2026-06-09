@@ -5,6 +5,7 @@ import hmac
 import os
 import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from functools import wraps
@@ -30,6 +31,9 @@ CLD_API_KEY       = os.environ["CLOUDINARY_API_KEY"]
 CLD_API_SECRET    = os.environ["CLOUDINARY_API_SECRET"]
 CLD_UPLOAD_URL    = f"https://api.cloudinary.com/v1_1/{CLD_CLOUD}/auto/upload"
 
+# Server-side store for pending orders (avoids 4KB cookie session limit)
+_pending_orders: dict[str, dict] = {}
+
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -47,17 +51,8 @@ def login_required(f):
 def cloudinary_upload(file_bytes: bytes, filename: str, folder: str) -> str:
     """Upload a file to Cloudinary and return its secure URL."""
     timestamp = str(int(time.time()))
-    public_id = f"{folder}/{filename}"
-
-    # Build signed upload params
-    params = {
-        "folder":     folder,
-        "public_id":  public_id,
-        "timestamp":  timestamp,
-        "use_filename": "true",
-        "unique_filename": "false",
-    }
-    # Signature: sorted param string + api_secret
+    # Only sign params that Cloudinary includes in signature verification
+    params = {"folder": folder, "timestamp": timestamp}
     sig_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + CLD_API_SECRET
     signature = hashlib.sha256(sig_str.encode()).hexdigest()
 
@@ -237,7 +232,8 @@ def upload():
             flash(f"Failed to upload {f.filename}: {e}", "danger")
             return redirect(url_for("index"))
 
-    session["pending_order"] = {
+    token = str(uuid.uuid4())
+    _pending_orders[token] = {
         "po_number":    po_number,
         "qty_15oz":     qty_15oz,
         "qty_11oz":     qty_11oz,
@@ -250,13 +246,15 @@ def upload():
         "ship_country": address.get("ship_country", "US"),
         "file_urls":    file_urls,
     }
-    return render_template("preview.html", parsed=session["pending_order"])
+    session["order_token"] = token
+    return render_template("preview.html", parsed=_pending_orders[token])
 
 
 @app.route("/confirm", methods=["POST"])
 @login_required
 def confirm():
-    parsed = session.pop("pending_order", None)
+    token = session.pop("order_token", None)
+    parsed = _pending_orders.pop(token, None) if token else None
     if not parsed:
         flash("Session expired — please re-upload.", "warning")
         return redirect(url_for("index"))
