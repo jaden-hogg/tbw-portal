@@ -71,17 +71,25 @@ def cloudinary_sign(params: dict) -> str:
 
 
 def cloudinary_upload(file_bytes: bytes, filename: str, folder: str) -> str:
-    """Server-side upload (used for the expanded box label). Returns secure URL."""
-    params = {"folder": folder, "timestamp": str(int(time.time()))}
-    resp = requests.post(
-        CLD_UPLOAD_URL,
-        data={**params, "api_key": CLD_API_KEY, "signature": cloudinary_sign(params)},
-        files={"file": (filename, file_bytes)},
-        timeout=120,
-    )
-    if not resp.ok:
-        raise RuntimeError(f"Cloudinary {resp.status_code}: {resp.text[:300]}")
-    return resp.json()["secure_url"]
+    """Server-side upload (used for the expanded box label). Returns secure URL.
+    Retries on transient network/timeout errors."""
+    last_err: Exception | None = None
+    for _ in range(3):
+        params = {"folder": folder, "timestamp": str(int(time.time()))}
+        try:
+            resp = requests.post(
+                CLD_UPLOAD_URL,
+                data={**params, "api_key": CLD_API_KEY, "signature": cloudinary_sign(params)},
+                files={"file": (filename, file_bytes)},
+                timeout=300,
+            )
+            if not resp.ok:
+                raise RuntimeError(f"Cloudinary {resp.status_code}: {resp.text[:300]}")
+            return resp.json()["secure_url"]
+        except (requests.exceptions.RequestException, RuntimeError) as e:
+            last_err = e
+            time.sleep(2)
+    raise last_err  # type: ignore[misc]
 
 
 def cloudinary_download(url: str) -> bytes:
