@@ -12,6 +12,7 @@ from functools import wraps
 
 import fitz
 import requests
+from box_labels import expand_box_labels, parse_po_line_items
 from flask import (
     Flask, flash, redirect, render_template,
     request, session, url_for,
@@ -242,28 +243,53 @@ def upload():
         flash("Please attach at least one file.", "danger")
         return redirect(url_for("index"))
 
-    # Upload files to Cloudinary and parse address from any PO PDF
+    # Read all files into memory first
+    files_data: list[list] = [[f.filename, f.read()] for f in files if f.filename]
+
+    def _find(keyword: str) -> bytes | None:
+        return next(
+            (b for n, b in files_data
+             if keyword in n.lower() and n.lower().endswith(".pdf")),
+            None,
+        )
+
+    # Parse ship-to address from the purchase order PDF
+    address: dict = {}
+    po_bytes = _find("purchase order")
+    if po_bytes:
+        try:
+            address = parse_address_from_pdf(po_bytes)
+        except Exception:
+            pass
+
+    # Expand the box label PDF: duplicate each design page to its ordered qty
+    expand_note: str | None = None
+    box_label_pages = 0
+    if po_bytes:
+        try:
+            line_items = parse_po_line_items(po_bytes)
+            for entry in files_data:
+                name, data = entry
+                if "box label" in name.lower() and name.lower().endswith(".pdf"):
+                    expanded, total, warnings = expand_box_labels(data, line_items)
+                    entry[1] = expanded  # replace original with expanded version
+                    box_label_pages = total
+                    expand_note = f"Box labels expanded to {total} pages"
+                    for w in warnings:
+                        flash(f"Box label warning — {w}", "warning")
+                    break
+        except Exception as e:
+            flash(f"Box label expansion failed ({e}). Original labels kept.", "warning")
+
+    # Upload all files (with expanded box label) to Cloudinary
     folder = f"TBW-Orders/PO-{po_number}"
     file_urls: list[tuple[str, str]] = []  # (filename, url)
-    address: dict = {}
-
-    for f in files:
-        if not f.filename:
-            continue
-        file_bytes = f.read()
-
-        # Parse address from the purchase order PDF
-        if not address and "purchase order" in f.filename.lower() and f.filename.lower().endswith(".pdf"):
-            try:
-                address = parse_address_from_pdf(file_bytes)
-            except Exception:
-                pass
-
+    for name, data in files_data:
         try:
-            url = cloudinary_upload(file_bytes, f.filename, folder)
-            file_urls.append((f.filename, url))
+            url = cloudinary_upload(data, name, folder)
+            file_urls.append((name, url))
         except Exception as e:
-            flash(f"Failed to upload {f.filename}: {e}", "danger")
+            flash(f"Failed to upload {name}: {e}", "danger")
             return redirect(url_for("index"))
 
     token = str(uuid.uuid4())
@@ -279,6 +305,7 @@ def upload():
         "ship_zip":     address.get("ship_zip"),
         "ship_country": address.get("ship_country", "US"),
         "file_urls":    file_urls,
+        "expand_note":  expand_note,
     }
     session["order_token"] = token
     return render_template("preview.html", parsed=_pending_orders[token])
