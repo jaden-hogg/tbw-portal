@@ -79,7 +79,8 @@ def cloudinary_upload(file_bytes: bytes, filename: str, folder: str) -> str:
         files={"file": (filename, file_bytes)},
         timeout=120,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        raise RuntimeError(f"Cloudinary {resp.status_code}: {resp.text[:300]}")
     return resp.json()["secure_url"]
 
 

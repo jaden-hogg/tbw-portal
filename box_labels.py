@@ -176,4 +176,5 @@ def expand_box_labels(pdf_bytes: bytes, line_items: list[dict]) -> tuple[bytes, 
     if len(used_indexes) != len(set(used_indexes)):
         warnings.append("two or more label pages matched the same design — check the result")
 
-    return out.tobytes(), out.page_count, warnings
+    # Deduplicate shared image objects so N copies of a page don't bloat the file
+    return out.tobytes(garbage=4, deflate=True, clean=True), out.page_count, warnings
