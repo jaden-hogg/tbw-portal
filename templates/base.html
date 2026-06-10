@@ -142,18 +142,16 @@
 <body>
   <nav class="navbar mb-4">
     <div class="container">
-      <div class="d-flex align-items-center gap-3">
-        {% if session.get('logged_in') %}
-        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm">Home</a>
-        {% endif %}
-        <span class="navbar-brand">TBW Order Portal</span>
-      </div>
       {% if session.get('logged_in') %}
+      <a href="{{ url_for('dashboard') }}" class="navbar-brand text-decoration-none">TBW Order Portal</a>
       <div class="d-flex gap-2">
+        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm">Orders</a>
         <a href="{{ url_for('index') }}" class="btn btn-outline-light btn-sm">New Order</a>
         <a href="{{ url_for('invoices') }}" class="btn btn-outline-light btn-sm">Invoices</a>
         <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm">Logout</a>
       </div>
+      {% else %}
+      <span class="navbar-brand">TBW Order Portal</span>
       {% endif %}
     </div>
   </nav>
