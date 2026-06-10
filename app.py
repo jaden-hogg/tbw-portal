@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import os
 import re
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -216,6 +217,49 @@ def index():
     return render_template("upload.html")
 
 
+def build_notes(po_number: str, file_urls: list[tuple[str, str]], warnings: list[str]) -> str:
+    notes = f"PO {po_number}"
+    if warnings:
+        notes += "\n\nBox label notes:\n" + "\n".join(f"- {w}" for w in warnings)
+    if file_urls:
+        notes += "\n\n" + "\n".join(f"{name}:\n{url}" for name, url in file_urls)
+    return notes
+
+
+def expand_and_attach(order_id: int, parsed: dict) -> None:
+    """
+    Background task: expand the box label, upload it, and update the order's
+    notes with the expanded label link plus any matching warnings.
+    """
+    name, data = parsed["box_label"]
+    folder = parsed["folder"]
+    warnings: list[str] = []
+
+    try:
+        line_items = parse_po_line_items(parsed["po_bytes"])
+        expanded, total, warnings = expand_box_labels(data, line_items)
+        upload_bytes = expanded
+    except Exception as e:  # noqa: BLE001
+        upload_bytes = data  # fall back to the original labels
+        warnings = [f"expansion failed, original labels kept: {e}"]
+
+    file_urls = list(parsed["file_urls"])
+    try:
+        url = cloudinary_upload(upload_bytes, name, folder)
+        file_urls.append((name, url))
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"box label upload failed: {e}")
+
+    notes = build_notes(parsed["po_number"], file_urls, warnings)
+    try:
+        order = ss_get(f"/orders/{order_id}")
+        order["internalNotes"] = notes
+        ss_post("/orders/createorder", order)
+        invalidate_dashboard_cache()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @app.route("/upload", methods=["POST"])
 @login_required
 def upload():
@@ -262,29 +306,21 @@ def upload():
         except Exception:
             pass
 
-    # Expand the box label PDF: duplicate each design page to its ordered qty
-    expand_note: str | None = None
-    box_label_pages = 0
+    # If we have a PO, defer the box label: it gets expanded and uploaded after
+    # confirm (in the background) so the customer doesn't wait on the vision pass.
+    box_label: tuple[str, bytes] | None = None
     if po_bytes:
-        try:
-            line_items = parse_po_line_items(po_bytes)
-            for entry in files_data:
-                name, data = entry
-                if "box label" in name.lower() and name.lower().endswith(".pdf"):
-                    expanded, total, warnings = expand_box_labels(data, line_items)
-                    entry[1] = expanded  # replace original with expanded version
-                    box_label_pages = total
-                    expand_note = f"Box labels expanded to {total} pages"
-                    for w in warnings:
-                        flash(f"Box label warning — {w}", "warning")
-                    break
-        except Exception as e:
-            flash(f"Box label expansion failed ({e}). Original labels kept.", "warning")
+        for name, data in files_data:
+            if "box label" in name.lower() and name.lower().endswith(".pdf"):
+                box_label = (name, data)
+                break
 
-    # Upload all files (with expanded box label) to Cloudinary
+    # Upload all files except the deferred box label to Cloudinary
     folder = f"TBW-Orders/PO-{po_number}"
     file_urls: list[tuple[str, str]] = []  # (filename, url)
     for name, data in files_data:
+        if box_label and name == box_label[0]:
+            continue
         try:
             url = cloudinary_upload(data, name, folder)
             file_urls.append((name, url))
@@ -305,7 +341,9 @@ def upload():
         "ship_zip":     address.get("ship_zip"),
         "ship_country": address.get("ship_country", "US"),
         "file_urls":    file_urls,
-        "expand_note":  expand_note,
+        "folder":       folder,
+        "po_bytes":     po_bytes if box_label else None,
+        "box_label":    box_label,  # (name, bytes) or None
     }
     session["order_token"] = token
     return render_template("preview.html", parsed=_pending_orders[token])
@@ -346,11 +384,8 @@ def confirm():
         "residential": False,
     }
 
-    # Build notes with file links, one per line
-    file_lines = "\n".join(
-        f"{name}:\n{url}" for name, url in parsed.get("file_urls", [])
-    )
-    notes = f"PO {po_number}\n\n{file_lines}" if file_lines else f"PO {po_number}"
+    # Initial notes — the expanded box label link + warnings are added later
+    notes = build_notes(po_number, parsed.get("file_urls", []), [])
 
     payload = {
         "orderNumber":    f"TBW-{po_number}",
@@ -376,6 +411,15 @@ def confirm():
     except Exception as e:
         flash(str(e), "danger")
         return redirect(url_for("index"))
+
+    # Expand the box label and attach it in the background so the customer
+    # doesn't wait on the vision pass.
+    if parsed.get("box_label"):
+        order_id = result.get("orderId")
+        if order_id:
+            threading.Thread(
+                target=expand_and_attach, args=(order_id, parsed), daemon=True
+            ).start()
 
     return redirect(url_for("dashboard"))
 
