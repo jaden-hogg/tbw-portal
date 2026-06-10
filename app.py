@@ -6,7 +6,6 @@ import os
 import re
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
@@ -97,23 +96,40 @@ def ss_post(path: str, payload: dict) -> dict:
     raise RuntimeError("ShipStation rate limit exceeded after 3 retries")
 
 
-def fetch_shipment_info(order_id: int) -> tuple[int, str, str, float, str]:
-    """Return (order_id, tracking, carrier, cost_with_markup, ship_date)."""
-    try:
-        data = ss_get("/shipments", {"orderId": order_id, "pageSize": 5})
-        for s in data.get("shipments", []):
-            if not s.get("voided") and s.get("trackingNumber"):
+def fetch_all_shipments() -> dict[str, dict]:
+    """
+    Fetch every TBW shipment in one paginated pass, keyed by orderNumber.
+    Matching by orderNumber (not orderId) survives order re-imports where the
+    orderId changes but the order number stays the same. Most recent non-voided
+    shipment per order wins.
+    """
+    by_order: dict[str, dict] = {}
+    page = 1
+    while True:
+        data = ss_get("/shipments", {
+            "orderNumber": "TBW",
+            "pageSize": 500,
+            "page": page,
+            "sortBy": "ShipDate",
+            "sortDir": "DESC",
+        })
+        shipments = data.get("shipments", [])
+        for s in shipments:
+            if s.get("voided") or not s.get("trackingNumber"):
+                continue
+            num = s.get("orderNumber", "")
+            if num and num not in by_order:  # DESC sort → first seen is most recent
                 raw_cost = float(s.get("shipmentCost") or 0)
-                return (
-                    order_id,
-                    s.get("trackingNumber", ""),
-                    s.get("carrierCode", ""),
-                    round(raw_cost * 1.2, 2),
-                    s.get("shipDate", ""),
-                )
-    except Exception:
-        pass
-    return order_id, "", "", 0.0, ""
+                by_order[num] = {
+                    "tracking":  s.get("trackingNumber", ""),
+                    "carrier":   s.get("carrierCode", ""),
+                    "cost":      round(raw_cost * 1.2, 2),
+                    "ship_date": s.get("shipDate", ""),
+                }
+        if page >= data.get("pages", 1):
+            break
+        page += 1
+    return by_order
 
 
 # ── PDF parsing (address only) ────────────────────────────────────────────────
@@ -359,28 +375,21 @@ def dashboard():
         })
         orders = [o for o in data.get("orders", []) if o["orderStatus"] != "cancelled"]
 
-        shipped_ids = [o["orderId"] for o in orders if o["orderStatus"] == "shipped"]
-        shipment_info: dict[int, tuple[str, str, float, str]] = {}
-        if shipped_ids:
-            with ThreadPoolExecutor(max_workers=10) as ex:
-                futures = {ex.submit(fetch_shipment_info, oid): oid for oid in shipped_ids}
-                for future in as_completed(futures):
-                    oid, tn, carrier, cost, ship_date = future.result()
-                    shipment_info[oid] = (tn, carrier, cost, ship_date)
+        # One batched call; match shipments to orders by orderNumber
+        shipments = fetch_all_shipments()
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=10)
         for order in orders:
-            tn, carrier, cost, ship_date = shipment_info.get(order["orderId"], ("", "", 0.0, ""))
-            order["_tracking"]  = tn
-            order["_carrier"]   = carrier
-            order["_cost"]      = cost
+            info = shipments.get(order.get("orderNumber", ""), {})
+            ship_date = info.get("ship_date", "")
+            order["_tracking"]  = info.get("tracking", "")
+            order["_carrier"]   = info.get("carrier", "")
+            order["_cost"]      = info.get("cost", 0.0)
             order["_ship_date"] = ship_date[:10] if ship_date else ""
 
-            if order["orderStatus"] == "shipped":
-                # Prefer shipment ship_date, fall back to order modifyDate
-                date_str = ship_date or order.get("modifyDate", "")
+            if order["orderStatus"] == "shipped" and ship_date:
                 try:
-                    sd = datetime.fromisoformat(date_str[:19]).replace(tzinfo=timezone.utc)
+                    sd = datetime.fromisoformat(ship_date[:19]).replace(tzinfo=timezone.utc)
                     if sd <= cutoff:
                         archived.append(order)
                         continue

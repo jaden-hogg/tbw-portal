@@ -46,14 +46,15 @@
           {% if order._tracking %}
             {% set t = order._tracking %}
             {% set c = order._carrier | lower %}
+            <div class="small">{{ t }}</div>
             {% if 'fedex' in c %}
-              <a href="https://www.fedex.com/apps/fedextrack/?tracknumbers={{ t }}" target="_blank" class="small">{{ t }}</a>
+              <a href="https://www.fedex.com/apps/fedextrack/?tracknumbers={{ t }}" target="_blank" class="small fw-semibold" style="color:var(--hogg-navy);">FedEx &#8599;</a>
             {% elif 'ups' in c %}
-              <a href="https://www.ups.com/track?tracknum={{ t }}" target="_blank" class="small">{{ t }}</a>
+              <a href="https://www.ups.com/track?tracknum={{ t }}" target="_blank" class="small fw-semibold" style="color:var(--hogg-navy);">UPS &#8599;</a>
             {% elif 'stamps' in c or 'usps' in c %}
-              <a href="https://tools.usps.com/go/TrackConfirmAction?tLabels={{ t }}" target="_blank" class="small">{{ t }}</a>
+              <a href="https://tools.usps.com/go/TrackConfirmAction?tLabels={{ t }}" target="_blank" class="small fw-semibold" style="color:var(--hogg-navy);">USPS &#8599;</a>
             {% else %}
-              <span class="small">{{ t }}</span>
+              <span class="small text-muted">{{ order._carrier or 'Carrier' }}</span>
             {% endif %}
           {% else %}
             <span class="text-muted small">—</span>
