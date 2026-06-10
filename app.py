@@ -246,12 +246,12 @@ def index():
 
 
 def build_notes(po_number: str, file_urls: list[tuple[str, str]], warnings: list[str]) -> str:
-    notes = f"PO {po_number}"
-    if warnings:
-        notes += "\n\nBox label notes:\n" + "\n".join(f"- {w}" for w in warnings)
+    sections = [f"PO {po_number}"]
     if file_urls:
-        notes += "\n\n" + "\n".join(f"{name}:\n{url}" for name, url in file_urls)
-    return notes
+        sections.append("FILES\n" + "\n".join(f"{name}\n{url}" for name, url in file_urls))
+    if warnings:
+        sections.append("NOTES\n" + "\n".join(f"- {w}" for w in warnings))
+    return "\n\n".join(sections)
 
 
 def build_order_items(parsed: dict) -> list[dict]:

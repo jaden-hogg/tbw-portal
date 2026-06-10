@@ -138,9 +138,21 @@ def expand_box_labels(pdf_bytes: bytes, line_items: list[dict]) -> tuple[bytes, 
             return i, -1, f"error: {e}"
 
     matches: dict[int, int] = {}
+    errors: list[str] = []
     with ThreadPoolExecutor(max_workers=8) as ex:
-        for i, index, phrase in ex.map(worker, list(enumerate(pages_png))):
+        for i, index, info in ex.map(worker, list(enumerate(pages_png))):
             matches[i] = index
+            if index < 0 and info:
+                errors.append(info)
+
+    matched_count = sum(1 for idx in matches.values() if 0 <= idx < len(line_items))
+
+    # Total failure (e.g. missing API key) — return original, one concise warning
+    if matched_count == 0:
+        reason = errors[0] if errors else "no pages matched"
+        return pdf_bytes, src.page_count, [
+            f"box labels NOT expanded — matching failed ({reason})"
+        ]
 
     # Build the expanded PDF
     out = fitz.open()
@@ -152,16 +164,16 @@ def expand_box_labels(pdf_bytes: bytes, line_items: list[dict]) -> tuple[bytes, 
             used_indexes.append(index)
         else:
             qty = 1
-            warnings.append(f"Page {i + 1}: no match found, printed 1 copy")
+            warnings.append(f"page {i + 1}: no match, printed 1 copy")
         for _ in range(qty):
             out.insert_pdf(src, from_page=i, to_page=i)
 
-    # Flag PO lines that never got a label, or labels matched to the same line twice
+    # Flag PO lines that never got a label, or duplicate matches
     matched_set = set(used_indexes)
-    for idx, li in enumerate(line_items):
-        if idx not in matched_set and li["qty"]:
-            warnings.append(f"No label matched PO line '{li['description'][:40]}' (qty {li['qty']})")
+    unmatched = [li for idx, li in enumerate(line_items) if idx not in matched_set and li["qty"]]
+    if unmatched:
+        warnings.append(f"{len(unmatched)} PO line(s) had no matching label — check the result")
     if len(used_indexes) != len(set(used_indexes)):
-        warnings.append("Two or more label pages matched the same PO line — check the result")
+        warnings.append("two or more label pages matched the same design — check the result")
 
     return out.tobytes(), out.page_count, warnings
