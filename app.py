@@ -11,6 +11,12 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
+from zoneinfo import ZoneInfo
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+ET = ZoneInfo("America/New_York")
 
 import fitz
 import requests
@@ -308,8 +314,9 @@ def submit_order(order_number: str, parsed: dict) -> None:
             except Exception as e:  # noqa: BLE001
                 warnings = [f"box label expansion failed, original kept: {e}"]
 
-        # 2. Create the ShipStation order with complete notes
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0000000")
+        # 2. Create the ShipStation order with complete notes (orderDate in ET,
+        #    the ShipStation account time zone, so the Friday-noon cutoff is accurate)
+        now = datetime.now(ET).strftime("%Y-%m-%dT%H:%M:%S.0000000")
         ship_to = {
             "name":        parsed["ship_name"]    or "The Buffalo Works",
             "street1":     parsed["ship_street1"] or "",
@@ -596,24 +603,38 @@ def _week_display(d: date) -> str:
     return f"{d.strftime('%B')} {_ordinal(d.day)}, {d.year}"
 
 
-def most_recent_friday(today: date | None = None) -> date:
-    today = today or datetime.now(timezone.utc).date()
-    return today - timedelta(days=(today.weekday() - 4) % 7)
+def most_recent_friday(now: datetime | None = None) -> date:
+    """Most recent week-ending Friday whose noon-ET cutoff has passed."""
+    now = now or datetime.now(ET)
+    d = now.date()
+    fri = d - timedelta(days=(d.weekday() - 4) % 7)  # most recent Friday <= today
+    if fri == d and now.hour < 12:                   # Friday before noon → week not closed
+        fri -= timedelta(days=7)
+    return fri
+
+
+def order_friday(order: dict) -> date | None:
+    """Week-ending Friday an order belongs to, using a Friday-noon-ET cutoff.
+    Orders placed after noon ET on Friday roll to the following week."""
+    od = order.get("orderDate", "")
+    if not od:
+        return None
+    try:
+        dt = datetime.fromisoformat(od[:19])  # ShipStation orderDate is ET, naive
+    except ValueError:
+        return None
+    d = dt.date()
+    fri = d + timedelta(days=(4 - d.weekday()) % 7)  # this week's Friday
+    if d == fri and dt.hour >= 12:                   # Friday afternoon → next week
+        fri += timedelta(days=7)
+    return fri
 
 
 def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -> list[dict]:
-    """Line items (one per PO) for orders placed in the Sat–Fri week ending week_end."""
-    week_start = week_end - timedelta(days=6)
+    """Line items (one per PO) for orders in the week ending week_end (Fri-noon-ET cutoff)."""
     rows: list[dict] = []
     for o in orders:
-        od = o.get("orderDate", "")
-        if not od:
-            continue
-        try:
-            d = date.fromisoformat(od[:10])
-        except ValueError:
-            continue
-        if not (week_start <= d <= week_end):
+        if order_friday(o) != week_end:
             continue
         info = shipments.get(o.get("orderNumber", ""), {})
 
@@ -651,15 +672,8 @@ def build_all_invoices() -> list[dict]:
     last_friday = most_recent_friday()
     totals: dict[date, float] = {}
     for o in orders:
-        od = o.get("orderDate", "")
-        if not od:
-            continue
-        try:
-            d = date.fromisoformat(od[:10])
-        except ValueError:
-            continue
-        friday = d + timedelta(days=(4 - d.weekday()) % 7)  # week-ending Friday
-        if friday < FIRST_INVOICE_FRIDAY or friday > last_friday:
+        friday = order_friday(o)
+        if friday is None or friday < FIRST_INVOICE_FRIDAY or friday > last_friday:
             continue
         info = shipments.get(o.get("orderNumber", ""), {})
         q11 = q15 = 0
@@ -678,15 +692,54 @@ def build_all_invoices() -> list[dict]:
     for i, friday in enumerate(fridays):
         is_latest = i == len(fridays) - 1
         rec = state.get(friday.isoformat(), {})
+        # Finalized weeks use their frozen number/total; otherwise computed live
         out.append({
             "week_iso":     friday.isoformat(),
             "week_display": _week_display(friday),
-            "number":       i + 1,
+            "number":       rec["number"] if rec.get("final") else i + 1,
             "status":       rec.get("status", "ready" if is_latest else "received"),
-            "total":        round(totals[friday], 2),
+            "total":        rec["total"] if rec.get("final") else round(totals[friday], 2),
+            "final":        rec.get("final", False),
         })
     out.reverse()  # most recent first
     return out
+
+
+def finalize_week(friday: date) -> None:
+    """Freeze a week's invoice (number, total, line items) into the durable store
+    so a sent invoice can't shift if orders are edited afterward. Idempotent."""
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        orders = ex.submit(fetch_orders).result()
+        shipments = ex.submit(fetch_all_shipments).result()
+    rows = invoice_rows_for_week(friday, orders, shipments)
+    if not rows:
+        return
+
+    target = next(
+        (inv for inv in build_all_invoices() if inv["week_iso"] == friday.isoformat()),
+        None,
+    )
+    if not target:
+        return
+
+    state = dict(load_invoice_state())
+    existing = state.get(friday.isoformat(), {})
+    state[friday.isoformat()] = {
+        "status": existing.get("status", target["status"]),
+        "number": target["number"],
+        "total":  target["total"],
+        "rows":   rows,
+        "final":  True,
+    }
+    save_invoice_state(state)
+
+
+def finalize_due_week() -> None:
+    """Scheduled Fri-noon-ET job: finalize the week that just closed."""
+    try:
+        finalize_week(most_recent_friday())
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @app.route("/invoices")
@@ -726,18 +779,25 @@ def invoices_pdf():
         flash("Invalid week.", "danger")
         return redirect(url_for("invoices"))
 
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        orders = ex.submit(fetch_orders).result()
-        shipments = ex.submit(fetch_all_shipments).result()
-    rows = invoice_rows_for_week(week_end, orders, shipments)
+    # Use the frozen snapshot for finalized weeks; otherwise compute live
+    rec = load_invoice_state().get(week_end.isoformat(), {})
+    if rec.get("final") and rec.get("rows"):
+        rows = rec["rows"]
+        number = str(rec["number"])
+    else:
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            orders = ex.submit(fetch_orders).result()
+            shipments = ex.submit(fetch_all_shipments).result()
+        rows = invoice_rows_for_week(week_end, orders, shipments)
+        number = next(
+            (str(inv["number"]) for inv in build_all_invoices() if inv["week_iso"] == week_end.isoformat()),
+            "",
+        )
+
     if not rows:
-        flash("No shipped orders that week.", "warning")
+        flash("No orders that week.", "warning")
         return redirect(url_for("invoices"))
 
-    number = next(
-        (str(inv["number"]) for inv in build_all_invoices() if inv["week_iso"] == week_end.isoformat()),
-        "",
-    )
     pdf = generate_invoice_pdf(
         number, _week_display(week_end), f"{week_end.strftime('%m/%d/%Y')} Total", rows,
     )
@@ -749,6 +809,23 @@ def invoices_pdf():
                 f'attachment; filename="Hogg Invoicing - The Buffalo Works - {number}.pdf"'
         },
     )
+
+
+# ── Scheduler: finalize each week at Friday noon ET ─────────────────────────────
+
+def _start_scheduler() -> None:
+    scheduler = BackgroundScheduler(timezone=ET)
+    scheduler.add_job(
+        finalize_due_week,
+        CronTrigger(day_of_week="fri", hour=12, minute=0, timezone=ET),
+        id="finalize_week",
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
+    scheduler.start()
+
+
+_start_scheduler()
 
 
 if __name__ == "__main__":
