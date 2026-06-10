@@ -9,14 +9,15 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 
 import fitz
 import requests
 from box_labels import expand_box_labels, parse_po_line_items
+from invoice import generate_invoice_pdf
 from flask import (
-    Flask, flash, redirect, render_template,
+    Flask, Response, flash, redirect, render_template,
     request, session, url_for,
 )
 
@@ -534,6 +535,157 @@ def dashboard():
     active = pending_rows(existing) + active
 
     return render_template("dashboard.html", active=active, archived=archived)
+
+
+# ── Invoices ──────────────────────────────────────────────────────────────────
+
+PRICE_11OZ = 3.50
+PRICE_15OZ = 4.00
+
+# Last invoice number used. Seeded at the current value (15); editable per-invoice.
+# Resets on redeploy — the number field on the form is the source of truth.
+_last_invoice_no = 15
+
+
+def _ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _week_display(d: date) -> str:
+    return f"{d.strftime('%B')} {_ordinal(d.day)}, {d.year}"
+
+
+def most_recent_friday(today: date | None = None) -> date:
+    today = today or datetime.now(timezone.utc).date()
+    return today - timedelta(days=(today.weekday() - 4) % 7)
+
+
+def invoice_rows_for_week(week_end: date) -> list[dict]:
+    """Pull shipped TBW orders in the 7 days ending week_end, pre-filled for invoicing."""
+    week_start = week_end - timedelta(days=6)
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        orders = ex.submit(fetch_orders).result()
+        shipments = ex.submit(fetch_all_shipments).result()
+
+    rows: list[dict] = []
+    for o in orders:
+        info = shipments.get(o.get("orderNumber", ""), {})
+        sd = info.get("ship_date", "")
+        if not sd:
+            continue
+        try:
+            d = date.fromisoformat(sd[:10])
+        except ValueError:
+            continue
+        if not (week_start <= d <= week_end):
+            continue
+
+        q11 = q15 = 0
+        for it in o.get("items", []):
+            sku = (it.get("sku") or "").lower()
+            if "11oz" in sku:
+                q11 += it.get("quantity", 0)
+            elif "15oz" in sku:
+                q15 += it.get("quantity", 0)
+
+        subtotal = q11 * PRICE_11OZ + q15 * PRICE_15OZ
+        shipping = round(info.get("cost", 0.0), 2)
+        price = PRICE_11OZ if (q11 and not q15) else PRICE_15OZ if (q15 and not q11) else 0.0
+        rows.append({
+            "po":       o["orderNumber"].replace("TBW-", ""),
+            "qty":      q11 + q15,
+            "price":    price,
+            "subtotal": round(subtotal, 2),
+            "shipping": shipping,
+            "total":    round(subtotal + shipping, 2),
+        })
+
+    rows.sort(key=lambda r: r["po"])
+    return rows
+
+
+@app.route("/invoices")
+@login_required
+def invoices():
+    week_str = request.args.get("week")
+    try:
+        week_end = date.fromisoformat(week_str) if week_str else most_recent_friday()
+    except ValueError:
+        week_end = most_recent_friday()
+
+    rows = []
+    try:
+        rows = invoice_rows_for_week(week_end)
+    except Exception as e:
+        flash(f"Could not load orders: {e}", "danger")
+
+    return render_template(
+        "invoices.html",
+        rows=rows,
+        week_value=week_end.isoformat(),
+        week_display=_week_display(week_end),
+        total_label=f"{week_end.strftime('%m/%d/%Y')} Total",
+        invoice_no=_last_invoice_no + 1,
+    )
+
+
+@app.route("/invoices/generate", methods=["POST"])
+@login_required
+def invoices_generate():
+    global _last_invoice_no
+    invoice_no = request.form.get("invoice_no", "").strip()
+    week_display = request.form.get("week_display", "").strip()
+    total_label = request.form.get("total_label", "Total").strip()
+
+    pos       = request.form.getlist("po")
+    qtys      = request.form.getlist("qty")
+    prices    = request.form.getlist("price")
+    subtotals = request.form.getlist("subtotal")
+    shippings = request.form.getlist("shipping")
+    totals    = request.form.getlist("total")
+
+    def _f(v):
+        try:
+            return float(str(v).replace("$", "").replace(",", "").strip() or 0)
+        except ValueError:
+            return 0.0
+
+    rows = []
+    for i in range(len(pos)):
+        if not pos[i].strip():
+            continue
+        rows.append({
+            "po":       pos[i].strip(),
+            "qty":      qtys[i].strip() if i < len(qtys) else "",
+            "price":    _f(prices[i]) if i < len(prices) else 0.0,
+            "subtotal": _f(subtotals[i]) if i < len(subtotals) else 0.0,
+            "shipping": _f(shippings[i]) if i < len(shippings) else 0.0,
+            "total":    _f(totals[i]) if i < len(totals) else 0.0,
+        })
+
+    if not rows:
+        flash("No line items to invoice.", "warning")
+        return redirect(url_for("invoices"))
+
+    pdf = generate_invoice_pdf(invoice_no, week_display, total_label, rows)
+
+    try:
+        _last_invoice_no = max(_last_invoice_no, int(invoice_no))
+    except ValueError:
+        pass
+
+    return Response(
+        pdf,
+        mimetype="application/pdf",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="Hogg Invoicing - The Buffalo Works - {invoice_no}.pdf"'
+        },
+    )
 
 
 if __name__ == "__main__":
