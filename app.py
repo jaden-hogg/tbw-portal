@@ -36,6 +36,10 @@ CLD_UPLOAD_URL    = f"https://api.cloudinary.com/v1_1/{CLD_CLOUD}/auto/upload"
 # Server-side store for pending orders (avoids 4KB cookie session limit)
 _pending_orders: dict[str, dict] = {}
 
+# Orders confirmed but not yet created in ShipStation (uploads/expansion running).
+# Keyed by order number ("TBW-105641"); shown as "Pending" on the dashboard.
+_submitting: dict[str, dict] = {}
+
 # Short-lived dashboard cache; invalidated on order create/cancel
 DASHBOARD_TTL = 120  # seconds
 _dashboard_cache: dict = {"data": None, "ts": 0.0}
@@ -226,11 +230,27 @@ def build_notes(po_number: str, file_urls: list[tuple[str, str]], warnings: list
     return notes
 
 
-def process_files_and_attach(order_id: int, parsed: dict) -> None:
+def build_order_items(parsed: dict) -> list[dict]:
+    items = []
+    if parsed["qty_15oz"] > 0:
+        items.append({
+            "lineItemKey": "1", "sku": "TBW-15oz", "name": "TBW 15oz",
+            "quantity": parsed["qty_15oz"], "unitPrice": 0.00,
+        })
+    if parsed["qty_11oz"] > 0:
+        items.append({
+            "lineItemKey": "2", "sku": "TBW-11oz", "name": "TBW 11oz",
+            "quantity": parsed["qty_11oz"], "unitPrice": 0.00,
+        })
+    return items
+
+
+def submit_order(order_number: str, parsed: dict) -> None:
     """
-    Background task: upload every file to Cloudinary (expanding the box label
-    first), then update the order's notes with the file links and any warnings.
-    Runs after confirm so the customer never waits on uploads or the vision pass.
+    Background task run after confirm. Uploads every file to Cloudinary
+    (expanding the box label first), then creates the ShipStation order with the
+    complete notes. The order only lands in ShipStation once everything is ready.
+    On success the pending entry is cleared; on failure it's marked failed.
     """
     folder = parsed["folder"]
     box_label_name = parsed.get("box_label_name")
@@ -238,29 +258,54 @@ def process_files_and_attach(order_id: int, parsed: dict) -> None:
     warnings: list[str] = []
     file_urls: list[tuple[str, str]] = []
 
-    for name, data in parsed["all_files"]:
-        upload_bytes = data
-        if name == box_label_name and po_bytes:
-            try:
-                line_items = parse_po_line_items(po_bytes)
-                upload_bytes, _total, warnings = expand_box_labels(data, line_items)
-            except Exception as e:  # noqa: BLE001
-                upload_bytes = data  # fall back to original labels
-                warnings = [f"expansion failed, original labels kept: {e}"]
-        try:
+    try:
+        # 1. Upload files (expanding the box label PDF first)
+        for name, data in parsed["all_files"]:
+            upload_bytes = data
+            if name == box_label_name and po_bytes:
+                try:
+                    line_items = parse_po_line_items(po_bytes)
+                    upload_bytes, _total, warnings = expand_box_labels(data, line_items)
+                except Exception as e:  # noqa: BLE001
+                    upload_bytes = data  # fall back to original labels
+                    warnings = [f"expansion failed, original labels kept: {e}"]
             url = cloudinary_upload(upload_bytes, name, folder)
             file_urls.append((name, url))
-        except Exception as e:  # noqa: BLE001
-            warnings.append(f"upload failed for {name}: {e}")
 
-    notes = build_notes(parsed["po_number"], file_urls, warnings)
-    try:
-        order = ss_get(f"/orders/{order_id}")
-        order["internalNotes"] = notes
-        ss_post("/orders/createorder", order)
+        # 2. Create the ShipStation order with complete notes
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0000000")
+        ship_to = {
+            "name":        parsed["ship_name"]    or "The Buffalo Works",
+            "street1":     parsed["ship_street1"] or "",
+            "street2":     parsed["ship_street2"] or "",
+            "city":        parsed["ship_city"]    or "",
+            "state":       parsed["ship_state"]   or "",
+            "postalCode":  parsed["ship_zip"]     or "",
+            "country":     parsed["ship_country"] or "US",
+            "residential": False,
+        }
+        ss_post("/orders/createorder", {
+            "orderNumber":    order_number,
+            "orderDate":      now,
+            "orderStatus":    "awaiting_shipment",
+            "customerEmail":  CUSTOMER_EMAIL,
+            "billTo":         ship_to,
+            "shipTo":         ship_to,
+            "items":          build_order_items(parsed),
+            "amountPaid":     0.00,
+            "taxAmount":      0.00,
+            "shippingAmount": 0.00,
+            "internalNotes":  build_notes(parsed["po_number"], file_urls, warnings),
+        })
+
+        # 3. Success — drop the pending entry and refresh the dashboard
+        _submitting.pop(order_number, None)
         invalidate_dashboard_cache()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        entry = _submitting.get(order_number)
+        if entry:
+            entry["status"] = "failed"
+            entry["error"] = str(e)
 
 
 @app.route("/upload", methods=["POST"])
@@ -351,68 +396,28 @@ def confirm():
         return redirect(url_for("index"))
 
     po_number = parsed["po_number"]
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0000000")
+    order_number = f"TBW-{po_number}"
 
-    items = []
-    if parsed["qty_15oz"] > 0:
-        items.append({
-            "lineItemKey": "1", "sku": "TBW-15oz", "name": "TBW 15oz",
-            "quantity": parsed["qty_15oz"], "unitPrice": 0.00,
-        })
-    if parsed["qty_11oz"] > 0:
-        items.append({
-            "lineItemKey": "2", "sku": "TBW-11oz", "name": "TBW 11oz",
-            "quantity": parsed["qty_11oz"], "unitPrice": 0.00,
-        })
-
-    ship_to = {
-        "name":        parsed["ship_name"]    or "The Buffalo Works",
-        "street1":     parsed["ship_street1"] or "",
-        "street2":     parsed["ship_street2"] or "",
-        "city":        parsed["ship_city"]    or "",
-        "state":       parsed["ship_state"]   or "",
-        "postalCode":  parsed["ship_zip"]     or "",
-        "country":     parsed["ship_country"] or "US",
-        "residential": False,
+    # Register as Pending and process in the background: uploads + box-label
+    # expansion run first, then the order is created in ShipStation. The order
+    # only appears in ShipStation once everything is ready.
+    _submitting[order_number] = {
+        "orderNumber": order_number,
+        "orderDate":   datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+        "shipTo": {
+            "name":  parsed["ship_name"] or "The Buffalo Works",
+            "city":  parsed["ship_city"] or "",
+            "state": parsed["ship_state"] or "",
+        },
+        "items":  build_order_items(parsed),
+        "status": "pending",
+        "error":  None,
     }
+    threading.Thread(
+        target=submit_order, args=(order_number, parsed), daemon=True
+    ).start()
 
-    # Initial notes — file links + warnings are added by the background task
-    notes = build_notes(po_number, [], [])
-
-    payload = {
-        "orderNumber":    f"TBW-{po_number}",
-        "orderDate":      now,
-        "orderStatus":    "awaiting_shipment",
-        "customerEmail":  CUSTOMER_EMAIL,
-        "billTo":         ship_to,
-        "shipTo":         ship_to,
-        "items":          items,
-        "amountPaid":     0.00,
-        "taxAmount":      0.00,
-        "shippingAmount": 0.00,
-        "internalNotes":  notes,
-    }
-
-    try:
-        result = ss_post("/orders/createorder", payload)
-        invalidate_dashboard_cache()
-        flash(f"Order {result.get('orderNumber', 'TBW-' + po_number)} submitted successfully.", "success")
-    except requests.HTTPError as e:
-        flash(f"ShipStation error: {e.response.text[:300]}", "danger")
-        return redirect(url_for("index"))
-    except Exception as e:
-        flash(str(e), "danger")
-        return redirect(url_for("index"))
-
-    # Upload files (and expand the box label) in the background so the customer
-    # doesn't wait on uploads or the vision pass.
-    if parsed.get("all_files"):
-        order_id = result.get("orderId")
-        if order_id:
-            threading.Thread(
-                target=process_files_and_attach, args=(order_id, parsed), daemon=True
-            ).start()
-
+    flash(f"Order {order_number} received — processing files and submitting to ShipStation.", "success")
     return redirect(url_for("dashboard"))
 
 
@@ -446,47 +451,68 @@ def fetch_orders() -> list[dict]:
     return [o for o in data.get("orders", []) if o["orderStatus"] != "cancelled"]
 
 
+def pending_rows(existing_numbers: set[str]) -> list[dict]:
+    """Build display rows for orders confirmed but not yet in ShipStation."""
+    rows: list[dict] = []
+    for number, rec in list(_submitting.items()):
+        if number in existing_numbers:
+            _submitting.pop(number, None)  # already landed in ShipStation
+            continue
+        rows.append({
+            "orderNumber": rec["orderNumber"],
+            "orderDate":   rec["orderDate"],
+            "shipTo":      rec["shipTo"],
+            "items":       rec["items"],
+            "orderStatus": "_failed" if rec.get("status") == "failed" else "_pending",
+            "_error":      rec.get("error"),
+            "_tracking":   "", "_carrier": "", "_cost": 0.0, "_ship_date": "",
+        })
+    return rows
+
+
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    # Serve from cache when fresh
+    # ShipStation-derived rows are cached; pending rows are merged fresh below.
     if _dashboard_cache["data"] and (time.time() - _dashboard_cache["ts"]) < DASHBOARD_TTL:
         active, archived = _dashboard_cache["data"]
-        return render_template("dashboard.html", active=active, archived=archived)
+    else:
+        active, archived = [], []
+        try:
+            # Orders and shipments are independent — fetch both at once
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                orders_future    = ex.submit(fetch_orders)
+                shipments_future = ex.submit(fetch_all_shipments)
+                orders    = orders_future.result()
+                shipments = shipments_future.result()
 
-    active: list[dict] = []
-    archived: list[dict] = []
-    try:
-        # Orders and shipments are independent — fetch both at once
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            orders_future    = ex.submit(fetch_orders)
-            shipments_future = ex.submit(fetch_all_shipments)
-            orders    = orders_future.result()
-            shipments = shipments_future.result()
+            cutoff = datetime.now(timezone.utc) - timedelta(days=10)
+            for order in orders:
+                info = shipments.get(order.get("orderNumber", ""), {})
+                ship_date = info.get("ship_date", "")
+                order["_tracking"]  = info.get("tracking", "")
+                order["_carrier"]   = info.get("carrier", "")
+                order["_cost"]      = info.get("cost", 0.0)
+                order["_ship_date"] = ship_date[:10] if ship_date else ""
 
-        cutoff = datetime.now(timezone.utc) - timedelta(days=10)
-        for order in orders:
-            info = shipments.get(order.get("orderNumber", ""), {})
-            ship_date = info.get("ship_date", "")
-            order["_tracking"]  = info.get("tracking", "")
-            order["_carrier"]   = info.get("carrier", "")
-            order["_cost"]      = info.get("cost", 0.0)
-            order["_ship_date"] = ship_date[:10] if ship_date else ""
+                if order["orderStatus"] == "shipped" and ship_date:
+                    try:
+                        sd = datetime.fromisoformat(ship_date[:19]).replace(tzinfo=timezone.utc)
+                        if sd <= cutoff:
+                            archived.append(order)
+                            continue
+                    except Exception:
+                        pass
+                active.append(order)
 
-            if order["orderStatus"] == "shipped" and ship_date:
-                try:
-                    sd = datetime.fromisoformat(ship_date[:19]).replace(tzinfo=timezone.utc)
-                    if sd <= cutoff:
-                        archived.append(order)
-                        continue
-                except Exception:
-                    pass
-            active.append(order)
+            _dashboard_cache["data"] = (active, archived)
+            _dashboard_cache["ts"]   = time.time()
+        except Exception as e:
+            flash(f"Could not load orders: {e}", "danger")
 
-        _dashboard_cache["data"] = (active, archived)
-        _dashboard_cache["ts"]   = time.time()
-    except Exception as e:
-        flash(f"Could not load orders: {e}", "danger")
+    # Merge in pending/failed orders not yet visible in ShipStation
+    existing = {o["orderNumber"] for o in active} | {o["orderNumber"] for o in archived}
+    active = pending_rows(existing) + active
 
     return render_template("dashboard.html", active=active, archived=archived)
 

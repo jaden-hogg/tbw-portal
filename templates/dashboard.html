@@ -34,6 +34,10 @@
             <span class="badge bg-success">Shipped</span>
           {% elif order.orderStatus == 'awaiting_shipment' %}
             <span class="badge bg-warning text-dark">Awaiting Shipment</span>
+          {% elif order.orderStatus == '_pending' %}
+            <span class="badge bg-info text-dark">Pending</span>
+          {% elif order.orderStatus == '_failed' %}
+            <span class="badge bg-danger" title="{{ order._error }}">Failed</span>
           {% elif order.orderStatus == 'on_hold' %}
             <span class="badge bg-secondary">On Hold</span>
           {% elif order.orderStatus == 'cancelled' %}
@@ -68,7 +72,7 @@
           {% endif %}
         </td>
         <td class="text-end">
-          {% if order.orderStatus not in ('shipped', 'cancelled') %}
+          {% if order.orderStatus not in ('shipped', 'cancelled', '_pending', '_failed') %}
           <form method="post" action="{{ url_for('cancel', order_id=order.orderId) }}"
                 onsubmit="return confirm('Cancel order {{ order.orderNumber }}?');">
             <button type="submit" class="btn btn-outline-danger btn-sm">Cancel</button>
@@ -107,6 +111,11 @@
     {{ order_table(archived) }}
   </div>
 </div>
+{% endif %}
+
+{% if active | selectattr('orderStatus', 'equalto', '_pending') | list %}
+<p class="text-muted small mt-3">Pending orders are being submitted to ShipStation — this page refreshes automatically.</p>
+<script>setTimeout(function () { window.location.reload(); }, 8000);</script>
 {% endif %}
 
 {% endblock %}
