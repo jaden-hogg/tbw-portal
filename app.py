@@ -334,51 +334,49 @@ def submit_order(order_number: str, parsed: dict) -> None:
             entry["error"] = str(e)
 
 
-@app.route("/upload", methods=["POST"])
+@app.route("/parse_po", methods=["POST"])
 @login_required
-def upload():
-    po_number = request.form.get("po_number", "").strip()
-    qty_15oz  = request.form.get("qty_15oz", "0").strip()
-    qty_11oz  = request.form.get("qty_11oz", "0").strip()
-
-    # Files are uploaded to Cloudinary by the browser; we receive only metadata.
+def parse_po():
+    """Parse the ship-to address from the PO PDF for the inline preview.
+    Receives only the PO file (small) — nothing is uploaded to Cloudinary."""
+    f = request.files.get("po")
+    if not f:
+        return {"address": {}}
     try:
-        uploaded = json.loads(request.form.get("files_json", "[]"))
-    except ValueError:
-        uploaded = []
+        return {"address": parse_address_from_pdf(f.read())}
+    except Exception:
+        return {"address": {}}
+
+
+@app.route("/submit", methods=["POST"])
+@login_required
+def submit():
+    """Called after the browser uploads files to Cloudinary on confirm.
+    Receives metadata only, then creates the order in the background."""
+    data = request.get_json(silent=True) or {}
+    po_number = (data.get("po_number") or "").strip()
+    uploaded = data.get("files") or []  # [{"name","url"}]
+
+    try:
+        qty_15oz = int(data.get("qty_15oz") or 0)
+        qty_11oz = int(data.get("qty_11oz") or 0)
+    except (ValueError, TypeError):
+        return {"error": "Quantities must be whole numbers."}, 400
 
     if not po_number:
-        flash("PO number is required.", "danger")
-        return redirect(url_for("index"))
-
-    try:
-        qty_15oz = int(qty_15oz) if qty_15oz else 0
-        qty_11oz = int(qty_11oz) if qty_11oz else 0
-    except ValueError:
-        flash("Quantities must be whole numbers.", "danger")
-        return redirect(url_for("index"))
-
+        return {"error": "PO number is required."}, 400
     if qty_15oz == 0 and qty_11oz == 0:
-        flash("Enter a quantity for at least one SKU.", "danger")
-        return redirect(url_for("index"))
-
+        return {"error": "Enter a quantity for at least one SKU."}, 400
     if not uploaded:
-        flash("Please attach at least one file.", "danger")
-        return redirect(url_for("index"))
+        return {"error": "No files were uploaded."}, 400
 
-    # uploaded = [{"name", "url"}, ...]
     file_urls = [(f["name"], f["url"]) for f in uploaded]
-
-    def _find(keyword: str) -> str | None:
-        return next(
-            (f["url"] for f in uploaded
-             if keyword in f["name"].lower() and f["name"].lower().endswith(".pdf")),
-            None,
-        )
-
-    # Parse ship-to address from the purchase order PDF (small download)
+    po_url = next(
+        (f["url"] for f in uploaded
+         if "purchase order" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
+        None,
+    )
     address: dict = {}
-    po_url = _find("purchase order")
     po_bytes = None
     if po_url:
         try:
@@ -387,8 +385,7 @@ def upload():
         except Exception:
             pass
 
-    # Identify the box label (expanded in the background after confirm)
-    box_label = None  # {"name", "url"}
+    box_label = None
     if po_bytes:
         box_label = next(
             (f for f in uploaded
@@ -396,8 +393,7 @@ def upload():
             None,
         )
 
-    token = str(uuid.uuid4())
-    _pending_orders[token] = {
+    parsed = {
         "po_number":    po_number,
         "qty_15oz":     qty_15oz,
         "qty_11oz":     qty_11oz,
@@ -410,29 +406,11 @@ def upload():
         "ship_country": address.get("ship_country", "US"),
         "folder":       f"TBW-Orders/PO-{po_number}",
         "file_urls":    file_urls,
-        "file_names":   [n for n, _ in file_urls],
         "po_bytes":     po_bytes if box_label else None,
         "box_label":    box_label,
     }
-    session["order_token"] = token
-    return render_template("preview.html", parsed=_pending_orders[token])
 
-
-@app.route("/confirm", methods=["POST"])
-@login_required
-def confirm():
-    token = session.pop("order_token", None)
-    parsed = _pending_orders.pop(token, None) if token else None
-    if not parsed:
-        flash("Session expired — please re-upload.", "warning")
-        return redirect(url_for("index"))
-
-    po_number = parsed["po_number"]
     order_number = f"TBW-{po_number}"
-
-    # Register as Pending and process in the background: uploads + box-label
-    # expansion run first, then the order is created in ShipStation. The order
-    # only appears in ShipStation once everything is ready.
     _submitting[order_number] = {
         "orderNumber": order_number,
         "orderDate":   datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
@@ -449,8 +427,8 @@ def confirm():
         target=submit_order, args=(order_number, parsed), daemon=True
     ).start()
 
-    flash(f"Order {order_number} received — processing files and submitting to ShipStation.", "success")
-    return redirect(url_for("dashboard"))
+    flash(f"Order {order_number} received — submitting to ShipStation.", "success")
+    return {"redirect": url_for("dashboard")}
 
 
 @app.route("/cancel/<int:order_id>", methods=["POST"])

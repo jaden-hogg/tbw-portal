@@ -2,74 +2,146 @@
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-sm-9 col-md-7">
-    <div class="card">
+
+    <!-- Step 1: order form -->
+    <div class="card" id="form-card">
       <div class="card-body p-4">
         <div class="card-title mb-1">New Order</div>
-        <p class="text-muted small mb-4">Enter PO details and attach all order files. Files upload directly and are linked in ShipStation.</p>
+        <p class="text-muted small mb-4">Enter PO details and attach all order files. Files upload when you confirm.</p>
 
-        <form id="order-form" method="post" action="{{ url_for('upload') }}">
-          <input type="hidden" name="files_json" id="files_json">
+        <div class="mb-3">
+          <label class="form-label fw-semibold">PO Number</label>
+          <input type="text" id="po_number" class="form-control" placeholder="e.g. 105641" required autofocus>
+        </div>
 
-          <div class="mb-3">
-            <label class="form-label fw-semibold">PO Number</label>
-            <input type="text" name="po_number" id="po_number" class="form-control" placeholder="e.g. 105641" required autofocus>
+        <div class="row mb-3">
+          <div class="col">
+            <label class="form-label fw-semibold">15oz Qty</label>
+            <input type="number" id="qty_15oz" class="form-control" min="0" value="0">
           </div>
-
-          <div class="row mb-3">
-            <div class="col">
-              <label class="form-label fw-semibold">15oz Qty</label>
-              <input type="number" name="qty_15oz" class="form-control" min="0" value="0">
-            </div>
-            <div class="col">
-              <label class="form-label fw-semibold">11oz Qty</label>
-              <input type="number" name="qty_11oz" class="form-control" min="0" value="0">
-            </div>
+          <div class="col">
+            <label class="form-label fw-semibold">11oz Qty</label>
+            <input type="number" id="qty_11oz" class="form-control" min="0" value="0">
           </div>
+        </div>
 
-          <div class="mb-4">
-            <label class="form-label fw-semibold">Files</label>
-            <input type="file" id="file_input" class="form-control" multiple required>
-            <div class="form-text">Box labels, art transfers, packing slip, PO, thumbnails.</div>
-          </div>
+        <div class="mb-4">
+          <label class="form-label fw-semibold">Files</label>
+          <input type="file" id="file_input" class="form-control" multiple required>
+          <div class="form-text">Box labels, art transfers, packing slip, PO, thumbnails.</div>
+        </div>
 
-          <button type="submit" id="submit-btn" class="btn btn-success w-100">Upload &amp; Preview</button>
-          <div id="progress" class="form-text mt-2"></div>
-        </form>
+        <button type="button" id="preview-btn" class="btn btn-success w-100">Preview</button>
       </div>
     </div>
+
+    <!-- Step 2: review (hidden until Preview) -->
+    <div class="card d-none" id="review-card">
+      <div class="card-body p-4">
+        <div class="card-title mb-4">Review Order — PO <code id="rv-po"></code></div>
+
+        <div class="row mb-4">
+          <div class="col-6">
+            <div class="section-label mb-2">Items</div>
+            <table class="table table-sm mb-0">
+              <thead class="table-light"><tr><th>SKU</th><th class="text-end">Qty</th></tr></thead>
+              <tbody id="rv-items"></tbody>
+            </table>
+          </div>
+          <div class="col-6">
+            <div class="section-label mb-2">Ship To</div>
+            <address class="mb-0 small" id="rv-address"></address>
+          </div>
+        </div>
+
+        <div class="section-label mb-2">Attached Files</div>
+        <ul class="list-unstyled mb-4" id="rv-files"></ul>
+
+        <div class="d-flex gap-2">
+          <button type="button" id="confirm-btn" class="btn btn-success flex-grow-1">Confirm</button>
+          <button type="button" id="back-btn" class="btn btn-outline-secondary">Back</button>
+        </div>
+        <div id="progress" class="form-text mt-2"></div>
+      </div>
+    </div>
+
   </div>
 </div>
 
 <script>
 (function () {
-  const form     = document.getElementById('order-form');
-  const fileIn   = document.getElementById('file_input');
-  const filesJSON= document.getElementById('files_json');
-  const btn      = document.getElementById('submit-btn');
-  const progress = document.getElementById('progress');
-  const poInput  = document.getElementById('po_number');
+  let files = [];
+  let address = {};
 
-  form.addEventListener('submit', async function (e) {
-    // If files are already uploaded (hidden field populated), let it submit.
-    if (filesJSON.value) return;
-    e.preventDefault();
+  const $ = (id) => document.getElementById(id);
+  const formCard = $('form-card'), reviewCard = $('review-card');
 
-    const files = Array.from(fileIn.files);
+  function poFile() {
+    return files.find(f => /purchase order/i.test(f.name) && /\.pdf$/i.test(f.name));
+  }
+
+  $('preview-btn').addEventListener('click', async function () {
+    files = Array.from($('file_input').files);
+    const po = $('po_number').value.trim();
+    if (!po) { alert('PO number is required.'); return; }
     if (!files.length) { alert('Please attach at least one file.'); return; }
-    const po = poInput.value.trim();
-    if (!po) { alert('PO number is required.'); poInput.focus(); return; }
+    const q15 = parseInt($('qty_15oz').value || '0', 10);
+    const q11 = parseInt($('qty_11oz').value || '0', 10);
+    if (!q15 && !q11) { alert('Enter a quantity for at least one SKU.'); return; }
 
+    // Parse address from the PO (sent to the server, not Cloudinary)
+    address = {};
+    const pf = poFile();
+    if (pf) {
+      try {
+        const fd = new FormData();
+        fd.append('po', pf);
+        const r = await fetch('{{ url_for("parse_po") }}', { method: 'POST', body: fd });
+        if (r.ok) address = (await r.json()).address || {};
+      } catch (e) { /* address optional */ }
+    }
+
+    // Render review
+    $('rv-po').textContent = po;
+    let itemsHtml = '';
+    if (q15 > 0) itemsHtml += `<tr><td>TBW-15oz</td><td class="text-end">${q15}</td></tr>`;
+    if (q11 > 0) itemsHtml += `<tr><td>TBW-11oz</td><td class="text-end">${q11}</td></tr>`;
+    $('rv-items').innerHTML = itemsHtml;
+
+    if (address.ship_name) {
+      $('rv-address').innerHTML =
+        `<strong>${address.ship_name}</strong><br>${address.ship_street1 || ''}` +
+        (address.ship_street2 ? `<br>${address.ship_street2}` : '') +
+        `<br>${address.ship_city || ''}${address.ship_city ? ', ' : ''}${address.ship_state || ''} ${address.ship_zip || ''}`;
+    } else {
+      $('rv-address').innerHTML = '<span class="text-muted">Address not found in PO PDF.</span>';
+    }
+
+    $('rv-files').innerHTML = files.map(f => `<li class="small text-muted">${f.name}</li>`).join('');
+
+    formCard.classList.add('d-none');
+    reviewCard.classList.remove('d-none');
+  });
+
+  $('back-btn').addEventListener('click', function () {
+    reviewCard.classList.add('d-none');
+    formCard.classList.remove('d-none');
+  });
+
+  $('confirm-btn').addEventListener('click', async function () {
+    const btn = this, progress = $('progress');
     btn.disabled = true;
-
     try {
-      // 1. Get a signed upload signature for this PO's folder
+      const po = $('po_number').value.trim();
       const folder = 'TBW-Orders/PO-' + po;
+
+      // 1. Signed upload token
       const signResp = await fetch('{{ url_for("sign_upload") }}', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder: folder }),
+        body: JSON.stringify({ folder }),
       });
-      if (!signResp.ok) throw new Error('Could not sign upload');
+      if (!signResp.ok) throw new Error('Could not start upload.');
       const sig = await signResp.json();
 
       // 2. Upload each file directly to Cloudinary
@@ -85,17 +157,27 @@
         fd.append('signature', sig.signature);
         const up = await fetch(sig.url, { method: 'POST', body: fd });
         if (!up.ok) throw new Error('Upload failed for ' + f.name);
-        const data = await up.json();
-        results.push({ name: f.name, url: data.secure_url });
+        results.push({ name: f.name, url: (await up.json()).secure_url });
       }
 
-      // 3. Hand the metadata to the server and submit
-      filesJSON.value = JSON.stringify(results);
-      progress.textContent = 'Finalizing…';
-      form.submit();
+      // 3. Create the order
+      progress.textContent = 'Submitting…';
+      const submitResp = await fetch('{{ url_for("submit") }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          po_number: po,
+          qty_15oz: parseInt($('qty_15oz').value || '0', 10),
+          qty_11oz: parseInt($('qty_11oz').value || '0', 10),
+          files: results,
+        }),
+      });
+      const out = await submitResp.json();
+      if (!submitResp.ok) throw new Error(out.error || 'Submit failed.');
+      window.location = out.redirect;
     } catch (err) {
       progress.textContent = '';
-      alert(err.message || 'Upload failed. Please try again.');
+      alert(err.message || 'Something went wrong. Please try again.');
       btn.disabled = false;
     }
   });
