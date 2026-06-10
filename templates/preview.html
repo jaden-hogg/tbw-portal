@@ -36,12 +36,15 @@
           </div>
         </div>
 
-        {% if parsed.file_urls %}
+        {% if parsed.file_urls or parsed.box_label_name %}
         <div class="section-label mb-2">Uploaded Files</div>
         <ul class="list-unstyled mb-4">
           {% for name, url in parsed.file_urls %}
           <li class="small"><a href="{{ url }}" target="_blank" style="color:var(--hogg-navy);">{{ name }}</a></li>
           {% endfor %}
+          {% if parsed.box_label_name %}
+          <li class="small text-muted">{{ parsed.box_label_name }}</li>
+          {% endif %}
         </ul>
         {% endif %}
 

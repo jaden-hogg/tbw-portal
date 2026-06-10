@@ -344,6 +344,7 @@ def upload():
         "folder":       folder,
         "po_bytes":     po_bytes if box_label else None,
         "box_label":    box_label,  # (name, bytes) or None
+        "box_label_name": box_label[0] if box_label else None,
     }
     session["order_token"] = token
     return render_template("preview.html", parsed=_pending_orders[token])
