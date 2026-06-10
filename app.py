@@ -319,11 +319,11 @@ def confirm():
         "residential": False,
     }
 
-    # Build notes with file links
-    file_lines = " | ".join(
-        f"[{name}] {url}" for name, url in parsed.get("file_urls", [])
+    # Build notes with file links, one per line
+    file_lines = "\n".join(
+        f"{name}:\n{url}" for name, url in parsed.get("file_urls", [])
     )
-    notes = f"PO {po_number} | {file_lines}" if file_lines else f"PO {po_number}"
+    notes = f"PO {po_number}\n\n{file_lines}" if file_lines else f"PO {po_number}"
 
     payload = {
         "orderNumber":    f"TBW-{po_number}",
