@@ -1,62 +1,70 @@
 {% extends "base.html" %}
-{% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-  <h4 class="mb-0">Invoice</h4>
-  <form method="get" action="{{ url_for('invoices') }}" class="d-flex align-items-end gap-2">
-    <div>
-      <label class="form-label small mb-1">Week ended</label>
-      <input type="date" name="week" value="{{ week_value }}" class="form-control form-control-sm">
-    </div>
-    <button type="submit" class="btn btn-outline-secondary btn-sm">Load</button>
-  </form>
-</div>
 
-<form method="post" action="{{ url_for('invoices_generate') }}">
-  <input type="hidden" name="week_display" value="{{ week_display }}">
-  <input type="hidden" name="total_label" value="{{ total_label }}">
-
-  <div class="card shadow-sm mb-3">
-    <div class="card-body p-4">
-      <div class="row mb-4">
-        <div class="col-4">
-          <label class="form-label fw-semibold">Invoice #</label>
-          <input type="text" name="invoice_no" value="{{ invoice_no }}" class="form-control">
-        </div>
-        <div class="col-8">
-          <label class="form-label fw-semibold">Week ended</label>
-          <input type="text" class="form-control" value="{{ week_display }}" disabled>
-        </div>
-      </div>
-
-      {% if rows %}
-      <table class="table table-sm align-middle" id="lines">
-        <thead class="table-light">
-          <tr>
-            <th>PO #</th><th>Qty</th><th>Price</th><th>Sub-Total</th><th>Shipping</th><th>Order Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in rows %}
-          <tr>
-            <td><input name="po" value="{{ r.po }}" class="form-control form-control-sm"></td>
-            <td><input name="qty" value="{{ r.qty }}" class="form-control form-control-sm" style="width:70px"></td>
-            <td><input name="price" value="{{ '%.2f'|format(r.price) }}" class="form-control form-control-sm" style="width:90px"></td>
-            <td><input name="subtotal" value="{{ '%.2f'|format(r.subtotal) }}" class="form-control form-control-sm" style="width:100px"></td>
-            <td><input name="shipping" value="{{ '%.2f'|format(r.shipping) }}" class="form-control form-control-sm" style="width:100px"></td>
-            <td><input name="total" value="{{ '%.2f'|format(r.total) }}" class="form-control form-control-sm" style="width:100px"></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      <div class="form-text">Pre-filled from ShipStation (11oz @ ${{ '%.2f'|format(3.50) }}, 15oz @ ${{ '%.2f'|format(4.00) }}, shipping = label × 1.2). Edit any field before generating.</div>
-      {% else %}
-      <p class="text-muted mb-0">No shipped orders found for the week ending {{ week_display }}.</p>
-      {% endif %}
-    </div>
-  </div>
-
-  {% if rows %}
-  <button type="submit" class="btn btn-success">Generate Invoice PDF</button>
-  {% endif %}
+{% macro invoice_table(weeks) %}
+{% for w in weeks %}
+<form id="invf-{{ w.week_iso }}" method="post" action="{{ url_for('invoices_save') }}">
+  <input type="hidden" name="week_iso" value="{{ w.week_iso }}">
 </form>
+{% endfor %}
+<div class="table-responsive">
+  <table class="table table-hover align-middle mb-0">
+    <thead class="table-light">
+      <tr>
+        <th>Invoice #</th>
+        <th>Week Ended</th>
+        <th class="text-end">Total</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in weeks %}
+      <tr>
+        <td style="width:130px">
+          <input type="text" form="invf-{{ w.week_iso }}" name="number" value="{{ w.number }}" class="form-control form-control-sm" style="width:90px">
+        </td>
+        <td class="text-nowrap">{{ w.week_display }}</td>
+        <td class="text-end">${{ "%.2f"|format(w.total) }}</td>
+        <td>
+          <select form="invf-{{ w.week_iso }}" name="status" class="form-select form-select-sm" style="width:190px"
+                  onchange="this.form.submit()">
+            {% for key, label in status_labels.items() %}
+            <option value="{{ key }}" {% if w.status == key %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td class="text-end text-nowrap">
+          <a href="{{ url_for('invoices_pdf', week=w.week_iso) }}" class="btn btn-outline-secondary btn-sm">PDF</a>
+          <button type="submit" form="invf-{{ w.week_iso }}" class="btn btn-outline-dark btn-sm">Save</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
+{% block content %}
+<h4 class="mb-4">Invoices</h4>
+
+{% if active %}
+<div class="card shadow-sm mb-4">
+  {{ invoice_table(active) }}
+</div>
+{% else %}
+<p class="text-muted">No invoices found.</p>
+{% endif %}
+
+{% if archived %}
+<div class="mb-2">
+  <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#inv-archive">
+    Archive ({{ archived|length }})
+  </button>
+</div>
+<div class="collapse" id="inv-archive">
+  <div class="card shadow-sm">
+    {{ invoice_table(archived) }}
+  </div>
+</div>
+{% endif %}
 {% endblock %}
