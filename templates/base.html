@@ -122,6 +122,12 @@
       border-radius: 4px;
       font-size: .85em;
     }
+
+    /* ── Invoice status select colors ── */
+    select.status-ready     { background: var(--hogg-sunset); color: #fff; border-color: var(--hogg-sunset); }
+    select.status-submitted { background: #3b6fb0; color: #fff; border-color: #3b6fb0; }
+    select.status-received  { background: #2a7d4f; color: #fff; border-color: #2a7d4f; }
+    select.status-ready option, select.status-submitted option, select.status-received option { color: #000; }
   </style>
 </head>
 <body>

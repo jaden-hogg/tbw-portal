@@ -541,8 +541,8 @@ def dashboard():
 
 PRICE_11OZ = 3.50
 PRICE_15OZ = 4.00
-INVOICE_WEEKS = 4          # show the most recent 4 weeks
-BASE_INVOICE_NO = 15       # most recent week's default number (week ended 2026-06-05)
+ACTIVE_INVOICES = 4                      # most recent 4 stay un-archived
+FIRST_INVOICE_FRIDAY = date(2026, 1, 23)  # invoice #1 — first week invoiced
 
 STATUS_LABELS = {
     "ready":     "Ready – Not Paid",
@@ -638,26 +638,54 @@ def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -
     return rows
 
 
-def build_weekly_invoices() -> list[dict]:
-    """One invoice per week for the last INVOICE_WEEKS weeks (most recent first)."""
-    fridays = [most_recent_friday() - timedelta(weeks=k) for k in range(INVOICE_WEEKS)]
+def build_all_invoices() -> list[dict]:
+    """
+    Reconstruct the full weekly invoice history from ShipStation, starting at
+    FIRST_INVOICE_FRIDAY. Only weeks with shipped orders count as invoices, and
+    they're numbered sequentially (1/23 = #1). Returns most-recent-first.
+    """
     with ThreadPoolExecutor(max_workers=2) as ex:
         orders = ex.submit(fetch_orders).result()
         shipments = ex.submit(fetch_all_shipments).result()
 
+    last_friday = most_recent_friday()
+    totals: dict[date, float] = {}
+    for o in orders:
+        info = shipments.get(o.get("orderNumber", ""), {})
+        sd = info.get("ship_date", "")
+        if not sd:
+            continue
+        try:
+            d = date.fromisoformat(sd[:10])
+        except ValueError:
+            continue
+        friday = d + timedelta(days=(4 - d.weekday()) % 7)  # week-ending Friday
+        if friday < FIRST_INVOICE_FRIDAY or friday > last_friday:
+            continue
+        q11 = q15 = 0
+        for it in o.get("items", []):
+            sku = (it.get("sku") or "").lower()
+            if "11oz" in sku:
+                q11 += it.get("quantity", 0)
+            elif "15oz" in sku:
+                q15 += it.get("quantity", 0)
+        total = q11 * PRICE_11OZ + q15 * PRICE_15OZ + round(info.get("cost", 0.0), 2)
+        totals[friday] = totals.get(friday, 0.0) + total
+
+    fridays = sorted(totals)  # ascending; only weeks with orders
     state = load_invoice_state()
     out: list[dict] = []
     for i, friday in enumerate(fridays):
-        rows = invoice_rows_for_week(friday, orders, shipments)
+        is_latest = i == len(fridays) - 1
         rec = state.get(friday.isoformat(), {})
         out.append({
             "week_iso":     friday.isoformat(),
             "week_display": _week_display(friday),
-            "number":       rec.get("number", str(BASE_INVOICE_NO - i)),
-            "status":       rec.get("status", "ready" if i == 0 else "received"),
-            "total":        round(sum(r["total"] for r in rows), 2),
-            "count":        len(rows),
+            "number":       i + 1,
+            "status":       rec.get("status", "ready" if is_latest else "received"),
+            "total":        round(totals[friday], 2),
         })
+    out.reverse()  # most recent first
     return out
 
 
@@ -666,13 +694,13 @@ def build_weekly_invoices() -> list[dict]:
 def invoices():
     weeks: list[dict] = []
     try:
-        weeks = build_weekly_invoices()
+        weeks = build_all_invoices()
     except Exception as e:
         flash(f"Could not load invoices: {e}", "danger")
     return render_template(
         "invoices.html",
-        active=weeks[:1],
-        archived=weeks[1:],
+        active=weeks[:ACTIVE_INVOICES],
+        archived=weeks[ACTIVE_INVOICES:],
         status_labels=STATUS_LABELS,
     )
 
@@ -681,11 +709,10 @@ def invoices():
 @login_required
 def invoices_save():
     week_iso = request.form.get("week_iso", "").strip()
-    number = request.form.get("number", "").strip()
     status = request.form.get("status", "ready").strip()
     if week_iso:
         state = dict(load_invoice_state())
-        state[week_iso] = {"number": number, "status": status}
+        state[week_iso] = {"status": status}
         save_invoice_state(state)
     return redirect(url_for("invoices"))
 
@@ -707,8 +734,10 @@ def invoices_pdf():
         flash("No shipped orders that week.", "warning")
         return redirect(url_for("invoices"))
 
-    rec = load_invoice_state().get(week_end.isoformat(), {})
-    number = rec.get("number", str(BASE_INVOICE_NO))
+    number = next(
+        (str(inv["number"]) for inv in build_all_invoices() if inv["week_iso"] == week_end.isoformat()),
+        "",
+    )
     pdf = generate_invoice_pdf(
         number, _week_display(week_end), f"{week_end.strftime('%m/%d/%Y')} Total", rows,
     )

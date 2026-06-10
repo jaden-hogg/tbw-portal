@@ -20,22 +20,19 @@
     <tbody>
       {% for w in weeks %}
       <tr>
-        <td style="width:130px">
-          <input type="text" form="invf-{{ w.week_iso }}" name="number" value="{{ w.number }}" class="form-control form-control-sm" style="width:90px">
-        </td>
+        <td style="width:110px"><code>{{ w.number }}</code></td>
         <td class="text-nowrap">{{ w.week_display }}</td>
         <td class="text-end">${{ "%.2f"|format(w.total) }}</td>
         <td>
-          <select form="invf-{{ w.week_iso }}" name="status" class="form-select form-select-sm" style="width:190px"
+          <select form="invf-{{ w.week_iso }}" name="status" class="form-select form-select-sm status-{{ w.status }}" style="width:190px"
                   onchange="this.form.submit()">
             {% for key, label in status_labels.items() %}
             <option value="{{ key }}" {% if w.status == key %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
           </select>
         </td>
-        <td class="text-end text-nowrap">
+        <td class="text-end">
           <a href="{{ url_for('invoices_pdf', week=w.week_iso) }}" class="btn btn-outline-secondary btn-sm">PDF</a>
-          <button type="submit" form="invf-{{ w.week_iso }}" class="btn btn-outline-dark btn-sm">Save</button>
         </td>
       </tr>
       {% endfor %}
