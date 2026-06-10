@@ -226,29 +226,32 @@ def build_notes(po_number: str, file_urls: list[tuple[str, str]], warnings: list
     return notes
 
 
-def expand_and_attach(order_id: int, parsed: dict) -> None:
+def process_files_and_attach(order_id: int, parsed: dict) -> None:
     """
-    Background task: expand the box label, upload it, and update the order's
-    notes with the expanded label link plus any matching warnings.
+    Background task: upload every file to Cloudinary (expanding the box label
+    first), then update the order's notes with the file links and any warnings.
+    Runs after confirm so the customer never waits on uploads or the vision pass.
     """
-    name, data = parsed["box_label"]
     folder = parsed["folder"]
+    box_label_name = parsed.get("box_label_name")
+    po_bytes = parsed.get("po_bytes")
     warnings: list[str] = []
+    file_urls: list[tuple[str, str]] = []
 
-    try:
-        line_items = parse_po_line_items(parsed["po_bytes"])
-        expanded, total, warnings = expand_box_labels(data, line_items)
-        upload_bytes = expanded
-    except Exception as e:  # noqa: BLE001
-        upload_bytes = data  # fall back to the original labels
-        warnings = [f"expansion failed, original labels kept: {e}"]
-
-    file_urls = list(parsed["file_urls"])
-    try:
-        url = cloudinary_upload(upload_bytes, name, folder)
-        file_urls.append((name, url))
-    except Exception as e:  # noqa: BLE001
-        warnings.append(f"box label upload failed: {e}")
+    for name, data in parsed["all_files"]:
+        upload_bytes = data
+        if name == box_label_name and po_bytes:
+            try:
+                line_items = parse_po_line_items(po_bytes)
+                upload_bytes, _total, warnings = expand_box_labels(data, line_items)
+            except Exception as e:  # noqa: BLE001
+                upload_bytes = data  # fall back to original labels
+                warnings = [f"expansion failed, original labels kept: {e}"]
+        try:
+            url = cloudinary_upload(upload_bytes, name, folder)
+            file_urls.append((name, url))
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"upload failed for {name}: {e}")
 
     notes = build_notes(parsed["po_number"], file_urls, warnings)
     try:
@@ -306,28 +309,16 @@ def upload():
         except Exception:
             pass
 
-    # If we have a PO, defer the box label: it gets expanded and uploaded after
-    # confirm (in the background) so the customer doesn't wait on the vision pass.
-    box_label: tuple[str, bytes] | None = None
+    # Identify the box label (expanded in the background after confirm)
+    box_label_name: str | None = None
     if po_bytes:
-        for name, data in files_data:
+        for name, _ in files_data:
             if "box label" in name.lower() and name.lower().endswith(".pdf"):
-                box_label = (name, data)
+                box_label_name = name
                 break
 
-    # Upload all files except the deferred box label to Cloudinary
-    folder = f"TBW-Orders/PO-{po_number}"
-    file_urls: list[tuple[str, str]] = []  # (filename, url)
-    for name, data in files_data:
-        if box_label and name == box_label[0]:
-            continue
-        try:
-            url = cloudinary_upload(data, name, folder)
-            file_urls.append((name, url))
-        except Exception as e:
-            flash(f"Failed to upload {name}: {e}", "danger")
-            return redirect(url_for("index"))
-
+    # No Cloudinary uploads here — everything is uploaded in the background after
+    # confirm so the customer only waits on the file transfer itself.
     token = str(uuid.uuid4())
     _pending_orders[token] = {
         "po_number":    po_number,
@@ -340,11 +331,11 @@ def upload():
         "ship_state":   address.get("ship_state"),
         "ship_zip":     address.get("ship_zip"),
         "ship_country": address.get("ship_country", "US"),
-        "file_urls":    file_urls,
-        "folder":       folder,
-        "po_bytes":     po_bytes if box_label else None,
-        "box_label":    box_label,  # (name, bytes) or None
-        "box_label_name": box_label[0] if box_label else None,
+        "folder":       f"TBW-Orders/PO-{po_number}",
+        "all_files":    [(n, d) for n, d in files_data],
+        "file_names":   [n for n, _ in files_data],
+        "po_bytes":     po_bytes if box_label_name else None,
+        "box_label_name": box_label_name,
     }
     session["order_token"] = token
     return render_template("preview.html", parsed=_pending_orders[token])
@@ -385,8 +376,8 @@ def confirm():
         "residential": False,
     }
 
-    # Initial notes — the expanded box label link + warnings are added later
-    notes = build_notes(po_number, parsed.get("file_urls", []), [])
+    # Initial notes — file links + warnings are added by the background task
+    notes = build_notes(po_number, [], [])
 
     payload = {
         "orderNumber":    f"TBW-{po_number}",
@@ -413,13 +404,13 @@ def confirm():
         flash(str(e), "danger")
         return redirect(url_for("index"))
 
-    # Expand the box label and attach it in the background so the customer
-    # doesn't wait on the vision pass.
-    if parsed.get("box_label"):
+    # Upload files (and expand the box label) in the background so the customer
+    # doesn't wait on uploads or the vision pass.
+    if parsed.get("all_files"):
         order_id = result.get("orderId")
         if order_id:
             threading.Thread(
-                target=expand_and_attach, args=(order_id, parsed), daemon=True
+                target=process_files_and_attach, args=(order_id, parsed), daemon=True
             ).start()
 
     return redirect(url_for("dashboard"))
