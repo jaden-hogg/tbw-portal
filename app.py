@@ -326,6 +326,25 @@ def confirm():
     return redirect(url_for("dashboard"))
 
 
+@app.route("/cancel/<int:order_id>", methods=["POST"])
+@login_required
+def cancel(order_id: int):
+    try:
+        # Fetch the full order, flip status to cancelled, re-post (createorder upserts by orderId)
+        order = ss_get(f"/orders/{order_id}")
+        if order.get("orderStatus") in ("shipped", "cancelled"):
+            flash(f"Order {order.get('orderNumber')} cannot be cancelled — already {order['orderStatus']}.", "warning")
+            return redirect(url_for("dashboard"))
+        order["orderStatus"] = "cancelled"
+        ss_post("/orders/createorder", order)
+        flash(f"Order {order.get('orderNumber')} cancelled.", "success")
+    except requests.HTTPError as e:
+        flash(f"ShipStation error: {e.response.text[:300]}", "danger")
+    except Exception as e:
+        flash(str(e), "danger")
+    return redirect(url_for("dashboard"))
+
+
 @app.route("/dashboard")
 @login_required
 def dashboard():
