@@ -357,7 +357,7 @@ def dashboard():
             "sortBy": "OrderDate",
             "sortDir": "DESC",
         })
-        orders = data.get("orders", [])
+        orders = [o for o in data.get("orders", []) if o["orderStatus"] != "cancelled"]
 
         shipped_ids = [o["orderId"] for o in orders if o["orderStatus"] == "shipped"]
         shipment_info: dict[int, tuple[str, str, float, str]] = {}
