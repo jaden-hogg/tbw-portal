@@ -613,6 +613,20 @@ def most_recent_friday(now: datetime | None = None) -> date:
     return fri
 
 
+# Weeks 3/20 and 3/27 were invoiced together with 4/03 as a single invoice (#6),
+# so they fold into the 4/03 week. Numbering continues sequentially after,
+# landing 6/05 on #15 to match the real invoice records.
+_COMBINED_INTO = {
+    date(2026, 3, 20): date(2026, 4, 3),
+    date(2026, 3, 27): date(2026, 4, 3),
+}
+
+
+def invoice_week(friday: date) -> date:
+    """Map a week-ending Friday to its invoice week (handles combined weeks)."""
+    return _COMBINED_INTO.get(friday, friday)
+
+
 def order_friday(order: dict) -> date | None:
     """Week-ending Friday an order belongs to, using a Friday-noon-ET cutoff.
     Orders placed after noon ET on Friday roll to the following week."""
@@ -634,7 +648,8 @@ def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -
     """Line items (one per PO) for orders in the week ending week_end (Fri-noon-ET cutoff)."""
     rows: list[dict] = []
     for o in orders:
-        if order_friday(o) != week_end:
+        fw = order_friday(o)
+        if fw is None or invoice_week(fw) != week_end:
             continue
         info = shipments.get(o.get("orderNumber", ""), {})
 
@@ -675,6 +690,7 @@ def build_all_invoices() -> list[dict]:
         friday = order_friday(o)
         if friday is None or friday < FIRST_INVOICE_FRIDAY or friday > last_friday:
             continue
+        friday = invoice_week(friday)  # fold combined weeks together
         info = shipments.get(o.get("orderNumber", ""), {})
         q11 = q15 = 0
         for it in o.get("items", []):

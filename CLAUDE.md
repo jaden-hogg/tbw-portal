@@ -26,6 +26,16 @@ rolled-up TBW-11oz / TBW-15oz. The box label PDF has one image per design (no te
 - **Must save with `tobytes(garbage=4, deflate=True, clean=True)`** to dedupe shared images — without it the file balloons (~20 MB for 162 pages) and exceeds Cloudinary's 10 MB image limit. **Requires PyMuPDF ≥ 1.26** — 1.24.x does not dedupe.
 - Matching warnings (unmatched pages/lines, total failure) are written into the ShipStation order notes, not shown to the customer.
 
+## Invoices tab (`invoice.py` + routes in `app.py`)
+Weekly invoice tracker for The Buffalo Works, reconstructed from ShipStation.
+- **One invoice per week**, Saturday–Friday, bucketed by **order date** (not ship date) with a **Friday-noon-ET cutoff**: orders placed after noon ET on Friday roll to the following week. The current week only becomes the active invoice once Friday noon ET passes.
+- ShipStation account is **Eastern time**; portal-created orders stamp `orderDate` in ET so the cutoff is accurate.
+- **Numbering**: sequential over weeks-that-have-orders, starting `FIRST_INVOICE_FRIDAY = 2026-01-23` (#1). Weeks with no orders are skipped (no number). Prices hardcoded: 11oz $3.50, 15oz $4.00; shipping = label cost × 1.2; total = subtotal + shipping.
+- **Hardcoded reconciliation** (`_COMBINED_INTO`): weeks 3/20 and 3/27 fold into the 4/03 invoice (#6) because they were invoiced together — this lands 6/05 on #15 to match the real records. Add to that dict to merge more weeks.
+- **Display**: most recent 4 invoices active, the rest in a collapsible Archive. Invoice # is read-only. Status dropdown (color-coded: amber Ready / blue Submitted / green Received) auto-saves on change. Default: most recent = Ready, all older = Received. Per-week **PDF** download generates the branded HOGG invoice (`invoice.py`, reportlab, logo in `static/hogg_logo.png`).
+- **Durable state** in Cloudinary raw JSON (`tbw-portal/invoice_state`, read via stable `.json` URL, in-memory cached): per-week `{status, number, total, rows, final}`.
+- **Auto-finalize**: an APScheduler job (in-process on Railway, `--workers 1`) fires **Fri 12:00 ET** and freezes the just-closed week (number/total/line items) into the store so a sent invoice can't shift if orders are edited later. Idempotent, 1h misfire grace; if missed, the week still computes live.
+
 ## ShipStation notes format
 `PO <number>` + a `FILES` section (filename + Cloudinary URL per line) + a `NOTES`
 section only if there were box-label warnings. The box-label link points to the
