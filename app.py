@@ -6,6 +6,7 @@ import os
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
@@ -32,6 +33,15 @@ CLD_UPLOAD_URL    = f"https://api.cloudinary.com/v1_1/{CLD_CLOUD}/auto/upload"
 
 # Server-side store for pending orders (avoids 4KB cookie session limit)
 _pending_orders: dict[str, dict] = {}
+
+# Short-lived dashboard cache; invalidated on order create/cancel
+DASHBOARD_TTL = 120  # seconds
+_dashboard_cache: dict = {"data": None, "ts": 0.0}
+
+
+def invalidate_dashboard_cache() -> None:
+    _dashboard_cache["data"] = None
+    _dashboard_cache["ts"] = 0.0
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -331,6 +341,7 @@ def confirm():
 
     try:
         result = ss_post("/orders/createorder", payload)
+        invalidate_dashboard_cache()
         flash(f"Order {result.get('orderNumber', 'TBW-' + po_number)} submitted successfully.", "success")
     except requests.HTTPError as e:
         flash(f"ShipStation error: {e.response.text[:300]}", "danger")
@@ -353,6 +364,7 @@ def cancel(order_id: int):
             return redirect(url_for("dashboard"))
         order["orderStatus"] = "cancelled"
         ss_post("/orders/createorder", order)
+        invalidate_dashboard_cache()
         flash(f"Order {order.get('orderNumber')} cancelled.", "success")
     except requests.HTTPError as e:
         flash(f"ShipStation error: {e.response.text[:300]}", "danger")
@@ -361,22 +373,33 @@ def cancel(order_id: int):
     return redirect(url_for("dashboard"))
 
 
+def fetch_orders() -> list[dict]:
+    data = ss_get("/orders", {
+        "orderNumber": "TBW",
+        "pageSize": 500,
+        "sortBy": "OrderDate",
+        "sortDir": "DESC",
+    })
+    return [o for o in data.get("orders", []) if o["orderStatus"] != "cancelled"]
+
+
 @app.route("/dashboard")
 @login_required
 def dashboard():
+    # Serve from cache when fresh
+    if _dashboard_cache["data"] and (time.time() - _dashboard_cache["ts"]) < DASHBOARD_TTL:
+        active, archived = _dashboard_cache["data"]
+        return render_template("dashboard.html", active=active, archived=archived)
+
     active: list[dict] = []
     archived: list[dict] = []
     try:
-        data = ss_get("/orders", {
-            "orderNumber": "TBW",
-            "pageSize": 500,
-            "sortBy": "OrderDate",
-            "sortDir": "DESC",
-        })
-        orders = [o for o in data.get("orders", []) if o["orderStatus"] != "cancelled"]
-
-        # One batched call; match shipments to orders by orderNumber
-        shipments = fetch_all_shipments()
+        # Orders and shipments are independent — fetch both at once
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            orders_future    = ex.submit(fetch_orders)
+            shipments_future = ex.submit(fetch_all_shipments)
+            orders    = orders_future.result()
+            shipments = shipments_future.result()
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=10)
         for order in orders:
@@ -397,6 +420,8 @@ def dashboard():
                     pass
             active.append(order)
 
+        _dashboard_cache["data"] = (active, archived)
+        _dashboard_cache["ts"]   = time.time()
     except Exception as e:
         flash(f"Could not load orders: {e}", "danger")
 
