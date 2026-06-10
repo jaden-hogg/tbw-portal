@@ -602,20 +602,20 @@ def most_recent_friday(today: date | None = None) -> date:
 
 
 def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -> list[dict]:
-    """Line items (one per PO) for orders shipped in the 7 days ending week_end."""
+    """Line items (one per PO) for orders placed in the Sat–Fri week ending week_end."""
     week_start = week_end - timedelta(days=6)
     rows: list[dict] = []
     for o in orders:
-        info = shipments.get(o.get("orderNumber", ""), {})
-        sd = info.get("ship_date", "")
-        if not sd:
+        od = o.get("orderDate", "")
+        if not od:
             continue
         try:
-            d = date.fromisoformat(sd[:10])
+            d = date.fromisoformat(od[:10])
         except ValueError:
             continue
         if not (week_start <= d <= week_end):
             continue
+        info = shipments.get(o.get("orderNumber", ""), {})
 
         q11 = q15 = 0
         for it in o.get("items", []):
@@ -651,17 +651,17 @@ def build_all_invoices() -> list[dict]:
     last_friday = most_recent_friday()
     totals: dict[date, float] = {}
     for o in orders:
-        info = shipments.get(o.get("orderNumber", ""), {})
-        sd = info.get("ship_date", "")
-        if not sd:
+        od = o.get("orderDate", "")
+        if not od:
             continue
         try:
-            d = date.fromisoformat(sd[:10])
+            d = date.fromisoformat(od[:10])
         except ValueError:
             continue
         friday = d + timedelta(days=(4 - d.weekday()) % 7)  # week-ending Friday
         if friday < FIRST_INVOICE_FRIDAY or friday > last_friday:
             continue
+        info = shipments.get(o.get("orderNumber", ""), {})
         q11 = q15 = 0
         for it in o.get("items", []):
             sku = (it.get("sku") or "").lower()
