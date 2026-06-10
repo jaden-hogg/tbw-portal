@@ -123,11 +123,20 @@
       font-size: .85em;
     }
 
-    /* ── Invoice status select colors ── */
-    select.status-ready     { background: var(--hogg-sunset); color: #fff; border-color: var(--hogg-sunset); }
-    select.status-submitted { background: #3b6fb0; color: #fff; border-color: #3b6fb0; }
-    select.status-received  { background: #2a7d4f; color: #fff; border-color: #2a7d4f; }
-    select.status-ready option, select.status-submitted option, select.status-received option { color: #000; }
+    /* ── Invoice status select colors (keep a visible white caret) ── */
+    select.status-ready, select.status-submitted, select.status-received {
+      color: #fff;
+      font-weight: 600;
+      padding-right: 2rem;
+      background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+      background-repeat: no-repeat;
+      background-position: right .55rem center;
+      background-size: 14px 11px;
+    }
+    select.status-ready     { background-color: var(--hogg-sunset); border-color: var(--hogg-sunset); }
+    select.status-submitted { background-color: #3b6fb0; border-color: #3b6fb0; }
+    select.status-received  { background-color: #2a7d4f; border-color: #2a7d4f; }
+    select.status-ready option, select.status-submitted option, select.status-received option { color: #000; background: #fff; }
   </style>
 </head>
 <body>
