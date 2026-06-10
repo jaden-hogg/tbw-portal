@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import re
 import threading
@@ -63,22 +64,29 @@ def login_required(f):
 
 # ── Cloudinary ────────────────────────────────────────────────────────────────
 
-def cloudinary_upload(file_bytes: bytes, filename: str, folder: str) -> str:
-    """Upload a file to Cloudinary and return its secure URL."""
-    timestamp = str(int(time.time()))
-    # Only sign params that Cloudinary includes in signature verification
-    params = {"folder": folder, "timestamp": timestamp}
+def cloudinary_sign(params: dict) -> str:
+    """SHA-256 signature over sorted params + api secret (Cloudinary scheme)."""
     sig_str = "&".join(f"{k}={v}" for k, v in sorted(params.items())) + CLD_API_SECRET
-    signature = hashlib.sha256(sig_str.encode()).hexdigest()
+    return hashlib.sha256(sig_str.encode()).hexdigest()
 
+
+def cloudinary_upload(file_bytes: bytes, filename: str, folder: str) -> str:
+    """Server-side upload (used for the expanded box label). Returns secure URL."""
+    params = {"folder": folder, "timestamp": str(int(time.time()))}
     resp = requests.post(
         CLD_UPLOAD_URL,
-        data={**params, "api_key": CLD_API_KEY, "signature": signature},
+        data={**params, "api_key": CLD_API_KEY, "signature": cloudinary_sign(params)},
         files={"file": (filename, file_bytes)},
-        timeout=60,
+        timeout=120,
     )
     resp.raise_for_status()
     return resp.json()["secure_url"]
+
+
+def cloudinary_download(url: str) -> bytes:
+    r = requests.get(url, timeout=120)
+    r.raise_for_status()
+    return r.content
 
 
 # ── ShipStation ───────────────────────────────────────────────────────────────
@@ -215,6 +223,22 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route("/sign_upload", methods=["POST"])
+@login_required
+def sign_upload():
+    """Return signed params so the browser can upload files straight to Cloudinary."""
+    folder = (request.get_json(silent=True) or {}).get("folder", "TBW-Orders")
+    timestamp = str(int(time.time()))
+    params = {"folder": folder, "timestamp": timestamp}
+    return {
+        "url":       CLD_UPLOAD_URL,
+        "api_key":   CLD_API_KEY,
+        "timestamp": timestamp,
+        "folder":    folder,
+        "signature": cloudinary_sign(params),
+    }
+
+
 @app.route("/")
 @login_required
 def index():
@@ -253,24 +277,26 @@ def submit_order(order_number: str, parsed: dict) -> None:
     On success the pending entry is cleared; on failure it's marked failed.
     """
     folder = parsed["folder"]
-    box_label_name = parsed.get("box_label_name")
+    box_label = parsed.get("box_label")
     po_bytes = parsed.get("po_bytes")
     warnings: list[str] = []
-    file_urls: list[tuple[str, str]] = []
+    file_urls = list(parsed["file_urls"])  # already uploaded by the browser
 
     try:
-        # 1. Upload files (expanding the box label PDF first)
-        for name, data in parsed["all_files"]:
-            upload_bytes = data
-            if name == box_label_name and po_bytes:
-                try:
-                    line_items = parse_po_line_items(po_bytes)
-                    upload_bytes, _total, warnings = expand_box_labels(data, line_items)
-                except Exception as e:  # noqa: BLE001
-                    upload_bytes = data  # fall back to original labels
-                    warnings = [f"expansion failed, original labels kept: {e}"]
-            url = cloudinary_upload(upload_bytes, name, folder)
-            file_urls.append((name, url))
+        # 1. Expand the box label (download original, expand, re-upload), then
+        #    swap its link in file_urls for the expanded version.
+        if box_label and po_bytes:
+            try:
+                original = cloudinary_download(box_label["url"])
+                line_items = parse_po_line_items(po_bytes)
+                expanded, _total, warnings = expand_box_labels(original, line_items)
+                new_url = cloudinary_upload(expanded, box_label["name"], folder)
+                file_urls = [
+                    (n, new_url if n == box_label["name"] else u)
+                    for n, u in file_urls
+                ]
+            except Exception as e:  # noqa: BLE001
+                warnings = [f"box label expansion failed, original kept: {e}"]
 
         # 2. Create the ShipStation order with complete notes
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0000000")
@@ -314,7 +340,12 @@ def upload():
     po_number = request.form.get("po_number", "").strip()
     qty_15oz  = request.form.get("qty_15oz", "0").strip()
     qty_11oz  = request.form.get("qty_11oz", "0").strip()
-    files     = request.files.getlist("files")
+
+    # Files are uploaded to Cloudinary by the browser; we receive only metadata.
+    try:
+        uploaded = json.loads(request.form.get("files_json", "[]"))
+    except ValueError:
+        uploaded = []
 
     if not po_number:
         flash("PO number is required.", "danger")
@@ -331,39 +362,40 @@ def upload():
         flash("Enter a quantity for at least one SKU.", "danger")
         return redirect(url_for("index"))
 
-    if not files or all(f.filename == "" for f in files):
+    if not uploaded:
         flash("Please attach at least one file.", "danger")
         return redirect(url_for("index"))
 
-    # Read all files into memory first
-    files_data: list[list] = [[f.filename, f.read()] for f in files if f.filename]
+    # uploaded = [{"name", "url"}, ...]
+    file_urls = [(f["name"], f["url"]) for f in uploaded]
 
-    def _find(keyword: str) -> bytes | None:
+    def _find(keyword: str) -> str | None:
         return next(
-            (b for n, b in files_data
-             if keyword in n.lower() and n.lower().endswith(".pdf")),
+            (f["url"] for f in uploaded
+             if keyword in f["name"].lower() and f["name"].lower().endswith(".pdf")),
             None,
         )
 
-    # Parse ship-to address from the purchase order PDF
+    # Parse ship-to address from the purchase order PDF (small download)
     address: dict = {}
-    po_bytes = _find("purchase order")
-    if po_bytes:
+    po_url = _find("purchase order")
+    po_bytes = None
+    if po_url:
         try:
+            po_bytes = cloudinary_download(po_url)
             address = parse_address_from_pdf(po_bytes)
         except Exception:
             pass
 
     # Identify the box label (expanded in the background after confirm)
-    box_label_name: str | None = None
+    box_label = None  # {"name", "url"}
     if po_bytes:
-        for name, _ in files_data:
-            if "box label" in name.lower() and name.lower().endswith(".pdf"):
-                box_label_name = name
-                break
+        box_label = next(
+            (f for f in uploaded
+             if "box label" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
+            None,
+        )
 
-    # No Cloudinary uploads here — everything is uploaded in the background after
-    # confirm so the customer only waits on the file transfer itself.
     token = str(uuid.uuid4())
     _pending_orders[token] = {
         "po_number":    po_number,
@@ -377,10 +409,10 @@ def upload():
         "ship_zip":     address.get("ship_zip"),
         "ship_country": address.get("ship_country", "US"),
         "folder":       f"TBW-Orders/PO-{po_number}",
-        "all_files":    [(n, d) for n, d in files_data],
-        "file_names":   [n for n, _ in files_data],
-        "po_bytes":     po_bytes if box_label_name else None,
-        "box_label_name": box_label_name,
+        "file_urls":    file_urls,
+        "file_names":   [n for n, _ in file_urls],
+        "po_bytes":     po_bytes if box_label else None,
+        "box_label":    box_label,
     }
     session["order_token"] = token
     return render_template("preview.html", parsed=_pending_orders[token])

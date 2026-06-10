@@ -5,12 +5,14 @@
     <div class="card">
       <div class="card-body p-4">
         <div class="card-title mb-1">New Order</div>
-        <p class="text-muted small mb-4">Enter PO details and attach all order files. Files are uploaded to Cloudinary and linked in ShipStation.</p>
-        <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+        <p class="text-muted small mb-4">Enter PO details and attach all order files. Files upload directly and are linked in ShipStation.</p>
+
+        <form id="order-form" method="post" action="{{ url_for('upload') }}">
+          <input type="hidden" name="files_json" id="files_json">
 
           <div class="mb-3">
             <label class="form-label fw-semibold">PO Number</label>
-            <input type="text" name="po_number" class="form-control" placeholder="e.g. 105641" required autofocus>
+            <input type="text" name="po_number" id="po_number" class="form-control" placeholder="e.g. 105641" required autofocus>
           </div>
 
           <div class="row mb-3">
@@ -26,14 +28,77 @@
 
           <div class="mb-4">
             <label class="form-label fw-semibold">Files</label>
-            <input type="file" name="files" class="form-control" multiple required>
+            <input type="file" id="file_input" class="form-control" multiple required>
             <div class="form-text">Box labels, art transfers, packing slip, PO, thumbnails.</div>
           </div>
 
-          <button type="submit" class="btn btn-success w-100">Upload &amp; Preview</button>
+          <button type="submit" id="submit-btn" class="btn btn-success w-100">Upload &amp; Preview</button>
+          <div id="progress" class="form-text mt-2"></div>
         </form>
       </div>
     </div>
   </div>
 </div>
+
+<script>
+(function () {
+  const form     = document.getElementById('order-form');
+  const fileIn   = document.getElementById('file_input');
+  const filesJSON= document.getElementById('files_json');
+  const btn      = document.getElementById('submit-btn');
+  const progress = document.getElementById('progress');
+  const poInput  = document.getElementById('po_number');
+
+  form.addEventListener('submit', async function (e) {
+    // If files are already uploaded (hidden field populated), let it submit.
+    if (filesJSON.value) return;
+    e.preventDefault();
+
+    const files = Array.from(fileIn.files);
+    if (!files.length) { alert('Please attach at least one file.'); return; }
+    const po = poInput.value.trim();
+    if (!po) { alert('PO number is required.'); poInput.focus(); return; }
+
+    btn.disabled = true;
+
+    try {
+      // 1. Get a signed upload signature for this PO's folder
+      const folder = 'TBW-Orders/PO-' + po;
+      const signResp = await fetch('{{ url_for("sign_upload") }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: folder }),
+      });
+      if (!signResp.ok) throw new Error('Could not sign upload');
+      const sig = await signResp.json();
+
+      // 2. Upload each file directly to Cloudinary
+      const results = [];
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        progress.textContent = `Uploading ${i + 1} of ${files.length}: ${f.name}…`;
+        const fd = new FormData();
+        fd.append('file', f);
+        fd.append('api_key', sig.api_key);
+        fd.append('timestamp', sig.timestamp);
+        fd.append('folder', sig.folder);
+        fd.append('signature', sig.signature);
+        const up = await fetch(sig.url, { method: 'POST', body: fd });
+        if (!up.ok) throw new Error('Upload failed for ' + f.name);
+        const data = await up.json();
+        results.push({ name: f.name, url: data.secure_url });
+      }
+
+      // 3. Hand the metadata to the server and submit
+      filesJSON.value = JSON.stringify(results);
+      progress.textContent = 'Finalizing…';
+      form.submit();
+    } catch (err) {
+      progress.textContent = '';
+      alert(err.message || 'Upload failed. Please try again.');
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
 {% endblock %}
