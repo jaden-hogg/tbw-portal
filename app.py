@@ -257,7 +257,7 @@ def index():
 def build_notes(po_number: str, file_urls: list[tuple[str, str]], warnings: list[str]) -> str:
     sections = [f"PO {po_number}"]
     if file_urls:
-        sections.append("FILES\n" + "\n".join(f"{name}\n{url}" for name, url in file_urls))
+        sections.append("FILES\n\n" + "\n\n".join(f"{name}\n{url}" for name, url in file_urls))
     if warnings:
         sections.append("NOTES\n" + "\n".join(f"- {w}" for w in warnings))
     return "\n\n".join(sections)
