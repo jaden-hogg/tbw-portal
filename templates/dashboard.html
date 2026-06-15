@@ -21,7 +21,7 @@
         <td><code>{{ order.orderNumber }}</code></td>
         <td class="text-nowrap">{{ order.orderDate[:10] }}</td>
         <td>
-          {{ order.shipTo.name }}<br>
+          {{ order._shop or order.shipTo.name }}<br>
           <small class="text-muted">{{ order.shipTo.city }}{% if order.shipTo.city and order.shipTo.state %}, {% endif %}{{ order.shipTo.state }}</small>
         </td>
         <td>

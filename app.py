@@ -136,6 +136,22 @@ def ss_post(path: str, payload: dict) -> dict:
     raise RuntimeError("ShipStation rate limit exceeded after 3 retries")
 
 
+def _shop_from_text(text: str) -> str | None:
+    """Extract the destination shop/business name from filenames in notes or a file list.
+    Matches patterns like '105656 Pack Slip 4 Simplee Stated Gifts.pdf'."""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("http"):
+            continue
+        m = re.search(
+            r'\d+\s+(?:Purchase Order|Pack Slip|Thumbnail)\s+4\s+(.+?)(?:\s*\(\d+\))?\.pdf',
+            line, re.IGNORECASE,
+        )
+        if m:
+            return m.group(1).strip()
+    return None
+
+
 def fetch_all_shipments() -> dict[str, dict]:
     """
     Fetch every TBW shipment in one paginated pass, keyed by orderNumber.
@@ -489,6 +505,7 @@ def submit():
         "items":  build_order_items(parsed),
         "status": "pending",
         "error":  None,
+        "_shop":  _shop_from_text("\n".join(name for name, _ in file_urls)),
     }
     threading.Thread(
         target=submit_order, args=(order_number, parsed), daemon=True
@@ -543,6 +560,7 @@ def pending_rows(existing_numbers: set[str]) -> list[dict]:
             "orderStatus": "_failed" if rec.get("status") == "failed" else "_pending",
             "_error":      rec.get("error"),
             "_tracking":   "", "_carrier": "", "_cost": 0.0, "_ship_date": "",
+            "_shop":       rec.get("_shop"),
         })
     return rows
 
@@ -571,6 +589,7 @@ def dashboard():
                 order["_carrier"]   = info.get("carrier", "")
                 order["_cost"]      = info.get("cost", 0.0)
                 order["_ship_date"] = ship_date[:10] if ship_date else ""
+                order["_shop"]      = _shop_from_text(order.get("internalNotes") or "")
 
                 if order["orderStatus"] == "shipped" and ship_date:
                     try:
