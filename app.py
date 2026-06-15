@@ -385,6 +385,8 @@ def submit_order(order_number: str, parsed: dict) -> None:
             "amountPaid":     0.00,
             "taxAmount":      0.00,
             "shippingAmount": 0.00,
+            "carrierCode":    "fedex",
+            "serviceCode":    "fedex_ground",
             "internalNotes":  build_notes(parsed["po_number"], file_urls, warnings),
             **build_package(parsed["qty_11oz"], parsed["qty_15oz"]),
         })
