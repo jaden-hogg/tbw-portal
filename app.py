@@ -285,6 +285,53 @@ def build_order_items(parsed: dict) -> list[dict]:
     return items
 
 
+def build_package(qty_11oz: int, qty_15oz: int) -> dict:
+    """Return weight + dimensions for the ShipStation order.
+
+    11oz box thresholds (12.6 oz each):
+      ≤8  → 10×10×10 | ≤16 → 13×12×9 | ≤32 → 16×14×10 | ≤44 → 18×16×14
+      >44 → 18×16×14 (multi-shipment; weight entered so user can split)
+
+    15oz box thresholds (1.1 lb = 17.6 oz each):
+      ≤8  → 10×10×10 | ≤14 → 13×12×9 | ≤36 → 18×16×14
+      >36 → 25×11×11 (multi-shipment; weight entered so user can build packages)
+
+    Mixed orders (both SKUs) default to 18×16×14 with combined weight.
+    """
+    WEIGHT_11OZ = 12.6   # ounces
+    WEIGHT_15OZ = 17.6   # ounces (1.1 lbs)
+
+    total_oz = round(qty_11oz * WEIGHT_11OZ + qty_15oz * WEIGHT_15OZ, 1)
+
+    if qty_11oz > 0 and qty_15oz == 0:
+        q = qty_11oz
+        if q <= 8:
+            dims = (10, 10, 10)
+        elif q <= 16:
+            dims = (13, 12, 9)
+        elif q <= 32:
+            dims = (16, 14, 10)
+        else:
+            dims = (18, 16, 14)
+    elif qty_15oz > 0 and qty_11oz == 0:
+        q = qty_15oz
+        if q <= 8:
+            dims = (10, 10, 10)
+        elif q <= 14:
+            dims = (13, 12, 9)
+        elif q <= 36:
+            dims = (18, 16, 14)
+        else:
+            dims = (25, 11, 11)
+    else:
+        dims = (18, 16, 14)
+
+    return {
+        "weight":     {"value": total_oz, "units": "ounces"},
+        "dimensions": {"length": dims[0], "width": dims[1], "height": dims[2], "units": "inches"},
+    }
+
+
 def submit_order(order_number: str, parsed: dict) -> None:
     """
     Background task run after confirm. Uploads every file to Cloudinary
@@ -339,6 +386,7 @@ def submit_order(order_number: str, parsed: dict) -> None:
             "taxAmount":      0.00,
             "shippingAmount": 0.00,
             "internalNotes":  build_notes(parsed["po_number"], file_urls, warnings),
+            **build_package(parsed["qty_11oz"], parsed["qty_15oz"]),
         })
 
         # 3. Success — drop the pending entry and refresh the dashboard
