@@ -14,7 +14,7 @@ orders. Replaces the old email-parsing workflow. Flask app deployed on Railway.
 3. **Preview** — sends *only the PO PDF* to `/parse_po` to read the ship-to address (no upload yet). Review shown inline.
 4. **Confirm** — browser uploads all files **directly to Cloudinary** (signed, via `/sign_upload`), then POSTs metadata to `/submit`. Files never stream through the Flask worker (that was the cause of upload timeouts).
 5. **Background thread** (`submit_order`): downloads the box label from Cloudinary → expands it → re-uploads → creates the ShipStation order with complete notes. The order only lands in ShipStation once everything is ready.
-6. **Dashboard** — lists all `TBW-*` orders from ShipStation. Shows **Pending** (in-memory, pre-ShipStation) → **Awaiting Shipment** → **Shipped**. Auto-refreshes while anything is pending. Cancel button for unshipped orders; cancelled orders hidden. Orders shipped 10+ days ago collapse into an Archive section. Shipped rows show tracking (carrier-linked, number plain-text for copy/paste) and cost = label cost × 1.2.
+6. **Dashboard** — lists all `TBW-*` orders from ShipStation. Shows **Pending** (in-memory, pre-ShipStation) → **Awaiting Shipment** → **Shipped**. Auto-refreshes while anything is pending. Cancel button for unshipped orders; cancelled orders hidden. Orders shipped 10+ days ago collapse into an Archive section. Shipped rows show tracking (carrier-linked, number plain-text for copy/paste) and cost = label cost × 1.2. The "Ship To" column shows the **destination shop/business name**, extracted from uploaded filenames (pattern: `{PO#} Purchase Order / Pack Slip / Thumbnail 4 {Business Name}.pdf`); falls back to `shipTo.name` if no match.
 
 ## Box label expansion (the core feature)
 The customer orders one SKU per *design* (each a distinct mug phrase); we fulfill as
@@ -35,6 +35,28 @@ Weekly invoice tracker for The Buffalo Works, reconstructed from ShipStation.
 - **Display**: most recent 4 invoices active, the rest in a collapsible Archive. Invoice # is read-only. Status dropdown (color-coded: amber Ready / blue Submitted / green Received) auto-saves on change. Default: most recent = Ready, all older = Received. Per-week **PDF** download generates the branded HOGG invoice (`invoice.py`, reportlab, logo in `static/hogg_logo.png`).
 - **Durable state** in Cloudinary raw JSON (`tbw-portal/invoice_state`, read via stable `.json` URL, in-memory cached): per-week `{status, number, total, rows, final}`.
 - **Auto-finalize**: an APScheduler job (in-process on Railway, `--workers 1`) fires **Fri 12:00 ET** and freezes the just-closed week (number/total/line items) into the store so a sent invoice can't shift if orders are edited later. Idempotent, 1h misfire grace; if missed, the week still computes live.
+
+## ShipStation order dimensions (`build_package` in `app.py`)
+Box size and weight are set automatically at order creation based on qty.
+
+**11oz** (12.6 oz each):
+| Qty | Box (L×W×H inches) |
+|-----|---------------------|
+| ≤ 8 | 10×10×10 |
+| ≤ 16 | 13×12×9 |
+| ≤ 32 | 16×14×10 |
+| ≤ 44 | 18×16×14 |
+| > 44 | 18×16×14 + total weight — add packages manually for multi-shipment |
+
+**15oz** (1.1 lb = 17.6 oz each):
+| Qty | Box (L×W×H inches) |
+|-----|---------------------|
+| ≤ 8 | 10×10×10 |
+| ≤ 14 | 13×12×9 |
+| ≤ 36 | 18×16×14 |
+| > 36 | 25×11×11 + total weight — build packages manually for multi-shipment |
+
+Mixed 11oz + 15oz orders default to 18×16×14 with combined weight.
 
 ## ShipStation notes format
 `PO <number>` + a `FILES` section (filename + Cloudinary URL per line) + a `NOTES`
