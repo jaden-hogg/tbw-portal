@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -10,6 +11,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
+from email.mime.text import MIMEText
 from functools import wraps
 from zoneinfo import ZoneInfo
 
@@ -40,6 +42,10 @@ CLD_CLOUD         = os.environ["CLOUDINARY_CLOUD_NAME"]
 CLD_API_KEY       = os.environ["CLOUDINARY_API_KEY"]
 CLD_API_SECRET    = os.environ["CLOUDINARY_API_SECRET"]
 CLD_UPLOAD_URL    = f"https://api.cloudinary.com/v1_1/{CLD_CLOUD}/auto/upload"
+NOTIFY_EMAIL      = "mugs@hoggoutfitters.com"
+GMAIL_CLIENT_ID     = os.environ.get("GMAIL_CLIENT_ID", "")
+GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET", "")
+GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN", "")
 
 # Server-side store for pending orders (avoids 4KB cookie session limit)
 _pending_orders: dict[str, dict] = {}
@@ -348,6 +354,54 @@ def build_package(qty_11oz: int, qty_15oz: int) -> dict:
     }
 
 
+def send_order_notification(order_number: str, parsed: dict, warnings: list[str]) -> None:
+    """Email mugs@ when a TBW order lands in ShipStation. Silently skips if Gmail creds absent."""
+    if not (GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET and GMAIL_REFRESH_TOKEN):
+        return
+    try:
+        token_resp = requests.post("https://oauth2.googleapis.com/token", data={
+            "grant_type":    "refresh_token",
+            "refresh_token": GMAIL_REFRESH_TOKEN,
+            "client_id":     GMAIL_CLIENT_ID,
+            "client_secret": GMAIL_CLIENT_SECRET,
+        }, timeout=15)
+        token_resp.raise_for_status()
+        access_token = token_resp.json()["access_token"]
+
+        qty_11 = parsed["qty_11oz"]
+        qty_15 = parsed["qty_15oz"]
+        ship_parts = [
+            parsed.get("ship_name") or "The Buffalo Works",
+            parsed.get("ship_street1") or "",
+            parsed.get("ship_street2") or "",
+            f"{parsed.get('ship_city') or ''}, {parsed.get('ship_state') or ''} {parsed.get('ship_zip') or ''}".strip(", "),
+        ]
+        ship_addr = "\n".join(p for p in ship_parts if p.strip())
+
+        lines = [f"Order: {order_number}", f"PO: {parsed['po_number']}", ""]
+        if qty_11:
+            lines.append(f"11oz:  {qty_11}")
+        if qty_15:
+            lines.append(f"15oz:  {qty_15}")
+        lines += ["", "Ship To:", ship_addr]
+        if warnings:
+            lines += ["", "Warnings:", *[f"- {w}" for w in warnings]]
+
+        msg = MIMEText("\n".join(lines))
+        msg["to"]      = NOTIFY_EMAIL
+        msg["from"]    = "jaden@hoggoutfitters.com"
+        msg["subject"] = f"New TBW Order: {order_number}"
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        requests.post(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"raw": raw},
+            timeout=15,
+        )
+    except Exception as e:
+        print(f"[notify] email failed for {order_number}: {e}", flush=True)
+
+
 def submit_order(order_number: str, parsed: dict) -> None:
     """
     Background task run after confirm. Uploads every file to Cloudinary
@@ -407,7 +461,8 @@ def submit_order(order_number: str, parsed: dict) -> None:
             **build_package(parsed["qty_11oz"], parsed["qty_15oz"]),
         })
 
-        # 3. Success — drop the pending entry and refresh the dashboard
+        # 3. Success — notify, drop the pending entry, and refresh the dashboard
+        send_order_notification(order_number, parsed, warnings)
         _submitting.pop(order_number, None)
         invalidate_dashboard_cache()
     except Exception as e:  # noqa: BLE001
