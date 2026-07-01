@@ -22,7 +22,7 @@ ET = ZoneInfo("America/New_York")
 
 import fitz
 import requests
-from box_labels import expand_box_labels, parse_manual_line_items, parse_po_line_items
+from box_labels import expand_box_labels, parse_po_line_items
 from invoice import generate_invoice_pdf
 from flask import (
     Flask, Response, flash, redirect, render_template,
@@ -248,13 +248,6 @@ def parse_address_from_pdf(pdf_bytes: bytes) -> dict:
     return _parse_address_lines(addr_lines)
 
 
-def parse_address_block(text: str) -> dict:
-    """Parse a manually-typed shipping address (name / street(s) / 'City, ST ZIP'),
-    used for replacement orders which have no PO PDF to extract an address from."""
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    return _parse_address_lines(lines)
-
-
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/login", methods=["GET", "POST"])
@@ -463,18 +456,11 @@ def submit_order(order_number: str, parsed: dict) -> None:
 
     try:
         # 1. Expand the box label (download original, expand, re-upload), then
-        #    swap its link in file_urls for the expanded version. Regular orders
-        #    get line items parsed from the PO PDF; replacement orders (no PO)
-        #    use manually-typed designs instead.
-        if box_label:
+        #    swap its link in file_urls for the expanded version.
+        if box_label and po_bytes:
             try:
-                if po_bytes:
-                    line_items = parse_po_line_items(po_bytes)
-                else:
-                    line_items = parsed.get("manual_line_items") or []
-                if not line_items:
-                    raise ValueError("no line items provided to match designs")
                 original = cloudinary_download(box_label["url"])
+                line_items = parse_po_line_items(po_bytes)
                 expanded, _total, warnings = expand_box_labels(original, line_items)
                 new_url = cloudinary_upload(expanded, box_label["name"], folder)
                 file_urls = [
@@ -539,34 +525,6 @@ def parse_po():
         return {"address": {}}
 
 
-@app.route("/lookup_replacement/<po_number>")
-@login_required
-def lookup_replacement(po_number: str):
-    """Look up the ship-to address from the original order for a replacement,
-    keyed by PO number, so it doesn't have to be retyped."""
-    try:
-        data = ss_get("/orders", {"orderNumber": f"TBW-{po_number}", "pageSize": 50})
-    except Exception:
-        return {"address": {}}
-    original = next(
-        (o for o in data.get("orders", []) if o.get("orderNumber") == f"TBW-{po_number}"),
-        None,
-    )
-    if not original:
-        return {"address": {}}
-    st = original.get("shipTo") or {}
-    return {
-        "address": {
-            "ship_name":    st.get("name"),
-            "ship_street1": st.get("street1"),
-            "ship_street2": st.get("street2"),
-            "ship_city":    st.get("city"),
-            "ship_state":   st.get("state"),
-            "ship_zip":     st.get("postalCode"),
-        }
-    }
-
-
 @app.route("/submit", methods=["POST"])
 @login_required
 def submit():
@@ -584,6 +542,31 @@ def submit():
 
     file_urls = [(f["name"], f["url"]) for f in uploaded]
 
+    # Same for both flows: a replacement always re-attaches the real Purchase
+    # Order PDF, so address + box-label line items parse from it exactly like
+    # a regular order.
+    po_url = next(
+        (f["url"] for f in uploaded
+         if "purchase order" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
+        None,
+    )
+    address = {}
+    po_bytes = None
+    if po_url:
+        try:
+            po_bytes = cloudinary_download(po_url)
+            address = parse_address_from_pdf(po_bytes)
+        except Exception:
+            pass
+
+    box_label = None
+    if po_bytes:
+        box_label = next(
+            (f for f in uploaded
+             if "box label" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
+            None,
+        )
+
     if is_replacement:
         try:
             qty_15oz_mug = int(data.get("qty_15oz_mug") or 0)
@@ -594,20 +577,6 @@ def submit():
             return {"error": "Quantities must be whole numbers."}, 400
         if qty_15oz_mug == 0 and qty_11oz_mug == 0 and qty_15oz_box == 0 and qty_11oz_box == 0:
             return {"error": "Enter a quantity for at least one item."}, 400
-
-        address_text = (data.get("address") or "").strip()
-        if not address_text:
-            return {"error": "Address is required for replacement orders."}, 400
-        address = parse_address_block(address_text)
-
-        # No PO PDF to parse line items from — designs are typed manually
-        # (one per line: "<qty> x <description>") and matched the same way.
-        box_label = next(
-            (f for f in uploaded
-             if "box label" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
-            None,
-        )
-        manual_line_items = parse_manual_line_items(data.get("line_items") or "")
 
         parsed = {
             "po_number":     po_number,
@@ -625,9 +594,8 @@ def submit():
             "ship_country":  address.get("ship_country", "US"),
             "folder":        f"TBW-Orders/PO-{po_number}-REPLACEMENT",
             "file_urls":     file_urls,
-            "po_bytes":      None,
+            "po_bytes":      po_bytes if box_label else None,
             "box_label":     box_label,
-            "manual_line_items": manual_line_items,
         }
         order_number = f"TBW-{po_number}-REPLACEMENT"
 
@@ -639,28 +607,6 @@ def submit():
             return {"error": "Quantities must be whole numbers."}, 400
         if qty_15oz == 0 and qty_11oz == 0:
             return {"error": "Enter a quantity for at least one SKU."}, 400
-
-        po_url = next(
-            (f["url"] for f in uploaded
-             if "purchase order" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
-            None,
-        )
-        address = {}
-        po_bytes = None
-        if po_url:
-            try:
-                po_bytes = cloudinary_download(po_url)
-                address = parse_address_from_pdf(po_bytes)
-            except Exception:
-                pass
-
-        box_label = None
-        if po_bytes:
-            box_label = next(
-                (f for f in uploaded
-                 if "box label" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
-                None,
-            )
 
         parsed = {
             "po_number":    po_number,
