@@ -10,7 +10,7 @@ orders. Replaces the old email-parsing workflow. Flask app deployed on Railway.
 
 ## Flow
 1. **Login** — single password (`PORTAL_PASSWORD`), session cookie.
-2. **New Order form** — PO number, 15oz qty, 11oz qty, file attachments (single page; JS-driven).
+2. **New Order form** — PO number, 15oz qty, 11oz qty, file attachments (single page; JS-driven). A **Replacement Order** toggle swaps the qty fields for a mug/box breakdown — see "Replacement orders" below.
 3. **Preview** — sends *only the PO PDF* to `/parse_po` to read the ship-to address (no upload yet). Review shown inline.
 4. **Confirm** — browser uploads all files **directly to Cloudinary** (signed, via `/sign_upload`), then POSTs metadata to `/submit`. Files never stream through the Flask worker (that was the cause of upload timeouts).
 5. **Background thread** (`submit_order`): downloads the box label from Cloudinary → expands it → re-uploads → creates the ShipStation order with complete notes. The order only lands in ShipStation once everything is ready.
