@@ -750,6 +750,7 @@ PRICE_11OZ = 3.50
 PRICE_15OZ = 4.00
 ACTIVE_INVOICES = 4                      # most recent 4 stay un-archived
 FIRST_INVOICE_FRIDAY = date(2026, 1, 23)  # invoice #1 — first week invoiced
+PATRIOTIC_WEEK = date(2026, 6, 26)  # America's 250th — red/white/blue theme, this week only
 
 STATUS_LABELS = {
     "ready":     "Ready – Not Paid",
@@ -1029,6 +1030,7 @@ def invoices_pdf():
 
     pdf = generate_invoice_pdf(
         number, _week_display(week_end), f"{week_end.strftime('%m/%d/%Y')} Total", rows,
+        patriotic=(week_end == PATRIOTIC_WEEK),
     )
     return Response(
         pdf,

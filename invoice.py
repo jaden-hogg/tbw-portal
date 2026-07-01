@@ -20,6 +20,8 @@ from reportlab.platypus import (
 from reportlab.lib.styles import ParagraphStyle
 
 NAVY = colors.HexColor("#1f3a5f")
+OLD_GLORY_RED = colors.HexColor("#B22234")
+OLD_GLORY_BLUE = colors.HexColor("#3C3B6E")
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "static", "hogg_logo.png")
 
 BILL_TO = [
@@ -44,12 +46,20 @@ def _money(v: float) -> str:
     return f"${v:,.2f}"
 
 
-def generate_invoice_pdf(invoice_no: str, week_ended: str, total_label: str, rows: list[dict]) -> bytes:
+def generate_invoice_pdf(
+    invoice_no: str, week_ended: str, total_label: str, rows: list[dict],
+    patriotic: bool = False,
+) -> bytes:
     """
     rows: [{po, qty, price, subtotal, shipping, total}], amounts as floats.
     week_ended: display string, e.g. "June 5th, 2026".
     total_label: totals-row label, e.g. "06/05/2026 Total".
+    patriotic: red/white/blue theme for the semiquincentennial week, instead
+    of the usual navy.
     """
+    accent = OLD_GLORY_BLUE if patriotic else NAVY
+    title_color = OLD_GLORY_RED if patriotic else NAVY
+
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=letter,
@@ -59,7 +69,7 @@ def generate_invoice_pdf(invoice_no: str, week_ended: str, total_label: str, row
 
     styles = {
         "right":  ParagraphStyle("right", fontName="Helvetica", fontSize=9, alignment=2, leading=12),
-        "right_b":ParagraphStyle("right_b", fontName="Helvetica-Bold", fontSize=20, alignment=2, textColor=NAVY, leading=26),
+        "right_b":ParagraphStyle("right_b", fontName="Helvetica-Bold", fontSize=20, alignment=2, textColor=title_color, leading=26),
         "right_s":ParagraphStyle("right_s", fontName="Helvetica", fontSize=9, alignment=2, textColor=colors.grey),
         "small":  ParagraphStyle("small", fontName="Helvetica", fontSize=9, leading=12),
         "foot":   ParagraphStyle("foot", fontName="Helvetica", fontSize=8, alignment=2, leading=11),
@@ -89,7 +99,22 @@ def generate_invoice_pdf(invoice_no: str, week_ended: str, total_label: str, row
     elements.append(Paragraph("INVOICE", styles["right_b"]))
     elements.append(Spacer(1, 4))
     elements.append(Paragraph(f"INVOICE # {invoice_no}", styles["right_s"]))
-    elements.append(Spacer(1, 24))
+    elements.append(Spacer(1, 16))
+
+    if patriotic:
+        stripe = Table([["", "", ""]], colWidths=[7.3 * inch / 3] * 3, rowHeights=[0.09 * inch])
+        stripe.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (0, 0), OLD_GLORY_RED),
+            ("BACKGROUND", (1, 0), (1, 0), colors.white),
+            ("BACKGROUND", (2, 0), (2, 0), OLD_GLORY_BLUE),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        elements.append(stripe)
+
+    elements.append(Spacer(1, 8))
 
     # ── Bill-to + week ──
     elements.append(Paragraph("<br/>".join(BILL_TO), styles["small"]))
@@ -124,7 +149,7 @@ def generate_invoice_pdf(invoice_no: str, week_ended: str, total_label: str, row
     table = Table(data, colWidths=col_widths)
     table.setStyle(TableStyle([
         # header row
-        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("BACKGROUND", (0, 0), (-1, 0), accent),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, 0), 10),
