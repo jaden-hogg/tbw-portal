@@ -54,6 +54,12 @@
           <div class="mb-3">
             <label class="form-label fw-semibold">Ship To Address</label>
             <textarea id="replacement_address" class="form-control" rows="4" placeholder="Business Name&#10;123 Main St&#10;City, ST 12345"></textarea>
+            <div class="form-text" id="replacement-address-status"></div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Line Items <span class="text-muted fw-normal">(only if attaching a Box Label PDF)</span></label>
+            <textarea id="replacement_line_items" class="form-control" rows="3" placeholder="2 x Palm Tree Sunset&#10;3 x Lake House"></textarea>
+            <div class="form-text">One design per line — used to match each label page to its replacement quantity.</div>
           </div>
         </div>
 
@@ -114,10 +120,33 @@
     return files.find(f => /purchase order/i.test(f.name) && /\.pdf$/i.test(f.name));
   }
 
+  // Pull the ship-to address from the original TBW-<po> order so it doesn't
+  // have to be retyped. Only fills if the textarea is still empty (won't
+  // clobber a manual edit).
+  async function autofillReplacementAddress() {
+    const po = $('po_number').value.trim();
+    const status = $('replacement-address-status');
+    if (!po || !$('is_replacement').checked || $('replacement_address').value.trim()) return;
+    try {
+      const r = await fetch('/lookup_replacement/' + encodeURIComponent(po));
+      if (!r.ok) return;
+      const a = (await r.json()).address || {};
+      if (!a.ship_name) return;
+      const cityStateZip = [[a.ship_city, a.ship_state].filter(Boolean).join(', '), a.ship_zip]
+        .filter(Boolean).join(' ');
+      $('replacement_address').value = [a.ship_name, a.ship_street1, a.ship_street2, cityStateZip]
+        .filter(Boolean).join('\n');
+      status.textContent = `Pulled from order TBW-${po} — edit if this replacement ships elsewhere.`;
+    } catch (e) { /* address stays manual */ }
+  }
+
   $('is_replacement').addEventListener('change', function () {
     $('normal-qty-fields').classList.toggle('d-none', this.checked);
     $('replacement-fields').classList.toggle('d-none', !this.checked);
+    if (this.checked) autofillReplacementAddress();
   });
+
+  $('po_number').addEventListener('blur', autofillReplacementAddress);
 
   $('preview-btn').addEventListener('click', async function () {
     files = Array.from($('file_input').files);
@@ -229,6 +258,7 @@
         payload.qty_15oz_box = parseInt($('qty_15oz_box').value || '0', 10);
         payload.qty_11oz_box = parseInt($('qty_11oz_box').value || '0', 10);
         payload.address = replacementAddressText;
+        payload.line_items = $('replacement_line_items').value.trim();
       } else {
         payload.qty_15oz = parseInt($('qty_15oz').value || '0', 10);
         payload.qty_11oz = parseInt($('qty_11oz').value || '0', 10);

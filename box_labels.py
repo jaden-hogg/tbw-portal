@@ -65,6 +65,18 @@ def parse_po_line_items(pdf_bytes: bytes) -> list[dict]:
     return items
 
 
+def parse_manual_line_items(text: str) -> list[dict]:
+    """Parse manually-typed replacement designs, one per line: '<qty> x <description>'.
+    Used instead of parse_po_line_items when there's no PO PDF (replacement orders)."""
+    items: list[dict] = []
+    for line in text.splitlines():
+        line = line.strip()
+        m = re.match(r'^(\d+)\s*[x×,-]?\s*(.+)$', line, re.IGNORECASE)
+        if m:
+            items.append({"sku": "", "description": m.group(2).strip(), "qty": int(m.group(1))})
+    return items
+
+
 def _match_page(page_png: bytes, descriptions: list[str]) -> dict:
     """Ask Claude which description best matches the phrase on this label image."""
     img_b64 = base64.standard_b64encode(page_png).decode()

@@ -22,7 +22,7 @@ ET = ZoneInfo("America/New_York")
 
 import fitz
 import requests
-from box_labels import expand_box_labels, parse_po_line_items
+from box_labels import expand_box_labels, parse_manual_line_items, parse_po_line_items
 from invoice import generate_invoice_pdf
 from flask import (
     Flask, Response, flash, redirect, render_template,
@@ -463,11 +463,18 @@ def submit_order(order_number: str, parsed: dict) -> None:
 
     try:
         # 1. Expand the box label (download original, expand, re-upload), then
-        #    swap its link in file_urls for the expanded version.
-        if box_label and po_bytes:
+        #    swap its link in file_urls for the expanded version. Regular orders
+        #    get line items parsed from the PO PDF; replacement orders (no PO)
+        #    use manually-typed designs instead.
+        if box_label:
             try:
+                if po_bytes:
+                    line_items = parse_po_line_items(po_bytes)
+                else:
+                    line_items = parsed.get("manual_line_items") or []
+                if not line_items:
+                    raise ValueError("no line items provided to match designs")
                 original = cloudinary_download(box_label["url"])
-                line_items = parse_po_line_items(po_bytes)
                 expanded, _total, warnings = expand_box_labels(original, line_items)
                 new_url = cloudinary_upload(expanded, box_label["name"], folder)
                 file_urls = [
@@ -532,6 +539,34 @@ def parse_po():
         return {"address": {}}
 
 
+@app.route("/lookup_replacement/<po_number>")
+@login_required
+def lookup_replacement(po_number: str):
+    """Look up the ship-to address from the original order for a replacement,
+    keyed by PO number, so it doesn't have to be retyped."""
+    try:
+        data = ss_get("/orders", {"orderNumber": f"TBW-{po_number}", "pageSize": 50})
+    except Exception:
+        return {"address": {}}
+    original = next(
+        (o for o in data.get("orders", []) if o.get("orderNumber") == f"TBW-{po_number}"),
+        None,
+    )
+    if not original:
+        return {"address": {}}
+    st = original.get("shipTo") or {}
+    return {
+        "address": {
+            "ship_name":    st.get("name"),
+            "ship_street1": st.get("street1"),
+            "ship_street2": st.get("street2"),
+            "ship_city":    st.get("city"),
+            "ship_state":   st.get("state"),
+            "ship_zip":     st.get("postalCode"),
+        }
+    }
+
+
 @app.route("/submit", methods=["POST"])
 @login_required
 def submit():
@@ -565,6 +600,15 @@ def submit():
             return {"error": "Address is required for replacement orders."}, 400
         address = parse_address_block(address_text)
 
+        # No PO PDF to parse line items from — designs are typed manually
+        # (one per line: "<qty> x <description>") and matched the same way.
+        box_label = next(
+            (f for f in uploaded
+             if "box label" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
+            None,
+        )
+        manual_line_items = parse_manual_line_items(data.get("line_items") or "")
+
         parsed = {
             "po_number":     po_number,
             "is_replacement": True,
@@ -582,7 +626,8 @@ def submit():
             "folder":        f"TBW-Orders/PO-{po_number}-REPLACEMENT",
             "file_urls":     file_urls,
             "po_bytes":      None,
-            "box_label":     None,
+            "box_label":     box_label,
+            "manual_line_items": manual_line_items,
         }
         order_number = f"TBW-{po_number}-REPLACEMENT"
 
