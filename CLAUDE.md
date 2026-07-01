@@ -26,6 +26,14 @@ rolled-up TBW-11oz / TBW-15oz. The box label PDF has one image per design (no te
 - **Must save with `tobytes(garbage=4, deflate=True, clean=True)`** to dedupe shared images — without it the file balloons (~20 MB for 162 pages) and exceeds Cloudinary's 10 MB image limit. **Requires PyMuPDF ≥ 1.26** — 1.24.x does not dedupe.
 - Matching warnings (unmatched pages/lines, total failure) are written into the ShipStation order notes, not shown to the customer.
 
+## Replacement orders
+A **Replacement Order** toggle on the New Order form (default off) covers Tyler requesting replacement mugs and/or boxes for a prior order.
+- When on, the normal 15oz/11oz qty fields are replaced with four fields — 11oz Mug Qty, 11oz Box Qty, 15oz Mug Qty, 15oz Box Qty — plus a manual **Ship To Address** textarea (parsed name/street/city/state/zip via `parse_address_block`, same line-based logic as the PDF parser). No PO PDF address-parsing or box-label expansion runs for these orders (`po_bytes`/`box_label` are `None`); the Choose Files button still attaches whatever reference files/photos are relevant.
+- PO Number is still required (ties the replacement back to the original order) and the resulting ShipStation `orderNumber` gets a `-REPLACEMENT` suffix (e.g. `TBW-105641-REPLACEMENT`), so it never collides with the original order number.
+- Mug items post with the normal SKUs (`TBW-11oz`/`TBW-15oz`). Box-only items have **no ShipStation SKU** (none exists) — they're entered as a manual product named `TBW 11oz - BOX ONLY` / `TBW 15oz - BOX ONLY` with no `sku` field.
+- Shipping weight/dimensions (`package_for` in `app.py`) combine mug + box qty per size and reuse the normal `build_package` thresholds.
+- **Invoicing**: `is_replacement_order()` checks the `-REPLACEMENT` order-number suffix. Box-only items are detected by `"BOX ONLY"` in the item name (no `sku` to match) — they're counted in the row's `qty` (shipping is still billed on them via the real ShipStation shipment cost) but never priced, so `subtotal` stays mug-only. Mug items on a replacement order are billed at **50% of the normal price** (`price_mult = 0.5` in `invoice_rows_for_week` / `build_all_invoices`).
+
 ## Invoices tab (`invoice.py` + routes in `app.py`)
 Weekly invoice tracker for The Buffalo Works, reconstructed from ShipStation.
 - **One invoice per week**, Saturday–Friday, bucketed by **order date** (not ship date) with a **Friday-noon-ET cutoff**: orders placed after noon ET on Friday roll to the following week. The current week only becomes the active invoice once Friday noon ET passes.
@@ -63,6 +71,9 @@ Mixed 11oz + 15oz orders default to 18×16×14 with combined weight.
 section only if there were box-label warnings. The box-label link points to the
 expanded PDF.
 
+## Order notification email
+When a ShipStation order is successfully created, an email is sent to `mugs@hoggoutfitters.com` (subject: `New TBW Order: TBW-XXXXX`) with the PO number, quantities, and ship-to address. Uses Gmail OAuth2 via the same raw-token pattern as the rest of the workspace. If Gmail credentials are missing, the notification silently skips (does not block order creation).
+
 ## Environment variables (set in Railway → Variables, NOT Keychain)
 | Variable | Purpose |
 |---|---|
@@ -72,6 +83,7 @@ expanded PDF.
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | file storage |
 | `ANTHROPIC_API_KEY` | box-label vision matching |
 | `MATCH_MODEL` | vision model (set to `claude-haiku-4-5` — cheap, accurate for bold phrases) |
+| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | Gmail OAuth2 for order notifications |
 
 Cloudinary folder per order: `TBW-Orders/PO-<number>/`.
 

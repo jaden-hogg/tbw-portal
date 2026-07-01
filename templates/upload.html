@@ -14,7 +14,12 @@
           <input type="text" id="po_number" class="form-control" placeholder="e.g. 105641" required autofocus>
         </div>
 
-        <div class="row mb-3">
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" id="is_replacement">
+          <label class="form-check-label fw-semibold" for="is_replacement">Replacement Order</label>
+        </div>
+
+        <div class="row mb-3" id="normal-qty-fields">
           <div class="col">
             <label class="form-label fw-semibold">15oz Qty</label>
             <input type="number" id="qty_15oz" class="form-control" min="0" value="0">
@@ -22,6 +27,33 @@
           <div class="col">
             <label class="form-label fw-semibold">11oz Qty</label>
             <input type="number" id="qty_11oz" class="form-control" min="0" value="0">
+          </div>
+        </div>
+
+        <div class="d-none" id="replacement-fields">
+          <div class="row mb-3">
+            <div class="col">
+              <label class="form-label fw-semibold">11oz Mug Qty</label>
+              <input type="number" id="qty_11oz_mug" class="form-control" min="0" value="0">
+            </div>
+            <div class="col">
+              <label class="form-label fw-semibold">11oz Box Qty</label>
+              <input type="number" id="qty_11oz_box" class="form-control" min="0" value="0">
+            </div>
+          </div>
+          <div class="row mb-3">
+            <div class="col">
+              <label class="form-label fw-semibold">15oz Mug Qty</label>
+              <input type="number" id="qty_15oz_mug" class="form-control" min="0" value="0">
+            </div>
+            <div class="col">
+              <label class="form-label fw-semibold">15oz Box Qty</label>
+              <input type="number" id="qty_15oz_box" class="form-control" min="0" value="0">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Ship To Address</label>
+            <textarea id="replacement_address" class="form-control" rows="4" placeholder="Business Name&#10;123 Main St&#10;City, ST 12345"></textarea>
           </div>
         </div>
 
@@ -72,6 +104,8 @@
 (function () {
   let files = [];
   let address = {};
+  let isReplacement = false;
+  let replacementAddressText = '';
 
   const $ = (id) => document.getElementById(id);
   const formCard = $('form-card'), reviewCard = $('review-card');
@@ -80,43 +114,69 @@
     return files.find(f => /purchase order/i.test(f.name) && /\.pdf$/i.test(f.name));
   }
 
+  $('is_replacement').addEventListener('change', function () {
+    $('normal-qty-fields').classList.toggle('d-none', this.checked);
+    $('replacement-fields').classList.toggle('d-none', !this.checked);
+  });
+
   $('preview-btn').addEventListener('click', async function () {
     files = Array.from($('file_input').files);
+    isReplacement = $('is_replacement').checked;
     const po = $('po_number').value.trim();
     if (!po) { alert('PO number is required.'); return; }
     if (!files.length) { alert('Please attach at least one file.'); return; }
-    const q15 = parseInt($('qty_15oz').value || '0', 10);
-    const q11 = parseInt($('qty_11oz').value || '0', 10);
-    if (!q15 && !q11) { alert('Enter a quantity for at least one SKU.'); return; }
 
-    // Parse address from the PO (sent to the server, not Cloudinary)
-    address = {};
-    const pf = poFile();
-    if (pf) {
-      try {
-        const fd = new FormData();
-        fd.append('po', pf);
-        const r = await fetch('{{ url_for("parse_po") }}', { method: 'POST', body: fd });
-        if (r.ok) address = (await r.json()).address || {};
-      } catch (e) { /* address optional */ }
+    let itemsHtml = '';
+
+    if (isReplacement) {
+      const q11m = parseInt($('qty_11oz_mug').value || '0', 10);
+      const q11b = parseInt($('qty_11oz_box').value || '0', 10);
+      const q15m = parseInt($('qty_15oz_mug').value || '0', 10);
+      const q15b = parseInt($('qty_15oz_box').value || '0', 10);
+      if (!q11m && !q11b && !q15m && !q15b) { alert('Enter a quantity for at least one item.'); return; }
+      replacementAddressText = $('replacement_address').value.trim();
+      if (!replacementAddressText) { alert('Address is required for replacement orders.'); return; }
+
+      if (q15m > 0) itemsHtml += `<tr><td>TBW-15oz (Mug)</td><td class="text-end">${q15m}</td></tr>`;
+      if (q15b > 0) itemsHtml += `<tr><td>TBW-15oz - BOX ONLY</td><td class="text-end">${q15b}</td></tr>`;
+      if (q11m > 0) itemsHtml += `<tr><td>TBW-11oz (Mug)</td><td class="text-end">${q11m}</td></tr>`;
+      if (q11b > 0) itemsHtml += `<tr><td>TBW-11oz - BOX ONLY</td><td class="text-end">${q11b}</td></tr>`;
+
+      $('rv-address').innerHTML = replacementAddressText
+        .split('\n').map(l => l.trim()).filter(Boolean).join('<br>');
+    } else {
+      const q15 = parseInt($('qty_15oz').value || '0', 10);
+      const q11 = parseInt($('qty_11oz').value || '0', 10);
+      if (!q15 && !q11) { alert('Enter a quantity for at least one SKU.'); return; }
+
+      // Parse address from the PO (sent to the server, not Cloudinary)
+      address = {};
+      const pf = poFile();
+      if (pf) {
+        try {
+          const fd = new FormData();
+          fd.append('po', pf);
+          const r = await fetch('{{ url_for("parse_po") }}', { method: 'POST', body: fd });
+          if (r.ok) address = (await r.json()).address || {};
+        } catch (e) { /* address optional */ }
+      }
+
+      if (q15 > 0) itemsHtml += `<tr><td>TBW-15oz</td><td class="text-end">${q15}</td></tr>`;
+      if (q11 > 0) itemsHtml += `<tr><td>TBW-11oz</td><td class="text-end">${q11}</td></tr>`;
+
+      if (address.ship_name) {
+        $('rv-address').innerHTML =
+          `<strong>${address.ship_name}</strong><br>${address.ship_street1 || ''}` +
+          (address.ship_street2 ? `<br>${address.ship_street2}` : '') +
+          `<br>${address.ship_city || ''}${address.ship_city ? ', ' : ''}${address.ship_state || ''} ${address.ship_zip || ''}`;
+      } else {
+        $('rv-address').innerHTML = '<span class="text-muted">Address not found in PO PDF.</span>';
+      }
     }
 
     // Render review
-    $('rv-po').textContent = po;
-    let itemsHtml = '';
-    if (q15 > 0) itemsHtml += `<tr><td>TBW-15oz</td><td class="text-end">${q15}</td></tr>`;
-    if (q11 > 0) itemsHtml += `<tr><td>TBW-11oz</td><td class="text-end">${q11}</td></tr>`;
+    $('rv-po').textContent = po + (isReplacement ? ' (Replacement)' : '');
     $('rv-items').innerHTML = itemsHtml;
-
-    if (address.ship_name) {
-      $('rv-address').innerHTML =
-        `<strong>${address.ship_name}</strong><br>${address.ship_street1 || ''}` +
-        (address.ship_street2 ? `<br>${address.ship_street2}` : '') +
-        `<br>${address.ship_city || ''}${address.ship_city ? ', ' : ''}${address.ship_state || ''} ${address.ship_zip || ''}`;
-    } else {
-      $('rv-address').innerHTML = '<span class="text-muted">Address not found in PO PDF.</span>';
-    }
-
     $('rv-files').innerHTML = files.map(f => `<li class="small text-muted">${f.name}</li>`).join('');
 
     formCard.classList.add('d-none');
@@ -162,15 +222,21 @@
 
       // 3. Create the order
       progress.textContent = 'Submitting…';
+      const payload = { po_number: po, is_replacement: isReplacement, files: results };
+      if (isReplacement) {
+        payload.qty_15oz_mug = parseInt($('qty_15oz_mug').value || '0', 10);
+        payload.qty_11oz_mug = parseInt($('qty_11oz_mug').value || '0', 10);
+        payload.qty_15oz_box = parseInt($('qty_15oz_box').value || '0', 10);
+        payload.qty_11oz_box = parseInt($('qty_11oz_box').value || '0', 10);
+        payload.address = replacementAddressText;
+      } else {
+        payload.qty_15oz = parseInt($('qty_15oz').value || '0', 10);
+        payload.qty_11oz = parseInt($('qty_11oz').value || '0', 10);
+      }
       const submitResp = await fetch('{{ url_for("submit") }}', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          po_number: po,
-          qty_15oz: parseInt($('qty_15oz').value || '0', 10),
-          qty_11oz: parseInt($('qty_11oz').value || '0', 10),
-          files: results,
-        }),
+        body: JSON.stringify(payload),
       });
       const out = await submitResp.json();
       if (!submitResp.ok) throw new Error(out.error || 'Submit failed.');

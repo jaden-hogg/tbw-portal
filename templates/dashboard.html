@@ -26,7 +26,7 @@
         </td>
         <td>
           {% for item in order['items'] %}
-            <small class="text-nowrap">{{ item.sku }} &times; {{ item.quantity }}</small>{% if not loop.last %}<br>{% endif %}
+            <small class="text-nowrap">{{ item.name }} &times; {{ item.quantity }}</small>{% if not loop.last %}<br>{% endif %}
           {% endfor %}
         </td>
         <td class="text-nowrap">

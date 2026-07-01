@@ -196,10 +196,8 @@ def fetch_all_shipments() -> dict[str, dict]:
 
 # ── PDF parsing (address only) ────────────────────────────────────────────────
 
-def parse_address_from_pdf(pdf_bytes: bytes) -> dict:
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    text = "\n".join(page.get_text() for page in doc)
-
+def _parse_address_lines(lines: list[str]) -> dict:
+    """Turn address lines (name / street(s) / 'City, ST ZIP') into a ship-to dict."""
     result: dict = {
         "ship_name":    None,
         "ship_street1": None,
@@ -209,27 +207,13 @@ def parse_address_from_pdf(pdf_bytes: bytes) -> dict:
         "ship_zip":     None,
         "ship_country": "US",
     }
-
-    addr_match = re.search(
-        r'(?:ship\s*to)\s*[:\n](.*?)(?:\n{2,}|\Z)',
-        text, re.IGNORECASE | re.DOTALL,
-    )
-    if not addr_match:
+    if not lines:
         return result
 
-    block = addr_match.group(1)
-    lines = [l.strip() for l in block.splitlines() if l.strip()]
-    addr_lines = []
-    for line in lines:
-        if re.match(r'^(?:Terms|Product ID|Description|Qty|Pric|Net \d+)', line, re.IGNORECASE):
-            break
-        addr_lines.append(line)
-
-    if addr_lines:
-        result["ship_name"] = addr_lines[0]
-    if len(addr_lines) >= 2:
-        result["ship_street1"] = addr_lines[1]
-    for line in addr_lines[2:]:
+    result["ship_name"] = lines[0]
+    if len(lines) >= 2:
+        result["ship_street1"] = lines[1]
+    for line in lines[2:]:
         csz = re.match(r'^(.*?),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$', line)
         if csz:
             result["ship_city"]  = csz.group(1).strip()
@@ -240,6 +224,35 @@ def parse_address_from_pdf(pdf_bytes: bytes) -> dict:
             result["ship_street2"] = line
 
     return result
+
+
+def parse_address_from_pdf(pdf_bytes: bytes) -> dict:
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    text = "\n".join(page.get_text() for page in doc)
+
+    addr_match = re.search(
+        r'(?:ship\s*to)\s*[:\n](.*?)(?:\n{2,}|\Z)',
+        text, re.IGNORECASE | re.DOTALL,
+    )
+    if not addr_match:
+        return _parse_address_lines([])
+
+    block = addr_match.group(1)
+    lines = [l.strip() for l in block.splitlines() if l.strip()]
+    addr_lines = []
+    for line in lines:
+        if re.match(r'^(?:Terms|Product ID|Description|Qty|Pric|Net \d+)', line, re.IGNORECASE):
+            break
+        addr_lines.append(line)
+
+    return _parse_address_lines(addr_lines)
+
+
+def parse_address_block(text: str) -> dict:
+    """Parse a manually-typed shipping address (name / street(s) / 'City, ST ZIP'),
+    used for replacement orders which have no PO PDF to extract an address from."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    return _parse_address_lines(lines)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -293,6 +306,32 @@ def build_notes(po_number: str, file_urls: list[tuple[str, str]], warnings: list
 
 
 def build_order_items(parsed: dict) -> list[dict]:
+    if parsed.get("is_replacement"):
+        items = []
+        if parsed["qty_15oz_mug"] > 0:
+            items.append({
+                "lineItemKey": "1", "sku": "TBW-15oz", "name": "TBW 15oz",
+                "quantity": parsed["qty_15oz_mug"], "unitPrice": 0.00,
+            })
+        if parsed["qty_11oz_mug"] > 0:
+            items.append({
+                "lineItemKey": "2", "sku": "TBW-11oz", "name": "TBW 11oz",
+                "quantity": parsed["qty_11oz_mug"], "unitPrice": 0.00,
+            })
+        # No ShipStation SKU exists for a box-only replacement — entered as a
+        # manual product (no sku) so it doesn't affect invoiced mug quantities.
+        if parsed["qty_15oz_box"] > 0:
+            items.append({
+                "lineItemKey": "3", "name": "TBW 15oz - BOX ONLY",
+                "quantity": parsed["qty_15oz_box"], "unitPrice": 0.00,
+            })
+        if parsed["qty_11oz_box"] > 0:
+            items.append({
+                "lineItemKey": "4", "name": "TBW 11oz - BOX ONLY",
+                "quantity": parsed["qty_11oz_box"], "unitPrice": 0.00,
+            })
+        return items
+
     items = []
     if parsed["qty_15oz"] > 0:
         items.append({
@@ -305,6 +344,17 @@ def build_order_items(parsed: dict) -> list[dict]:
             "quantity": parsed["qty_11oz"], "unitPrice": 0.00,
         })
     return items
+
+
+def package_for(parsed: dict) -> dict:
+    """Weight/dimensions for the order, combining mug + box-only quantities per
+    size for replacement orders (both ship in the same box)."""
+    if parsed.get("is_replacement"):
+        return build_package(
+            parsed["qty_11oz_mug"] + parsed["qty_11oz_box"],
+            parsed["qty_15oz_mug"] + parsed["qty_15oz_box"],
+        )
+    return build_package(parsed["qty_11oz"], parsed["qty_15oz"])
 
 
 def build_package(qty_11oz: int, qty_15oz: int) -> dict:
@@ -368,8 +418,6 @@ def send_order_notification(order_number: str, parsed: dict, warnings: list[str]
         token_resp.raise_for_status()
         access_token = token_resp.json()["access_token"]
 
-        qty_11 = parsed["qty_11oz"]
-        qty_15 = parsed["qty_15oz"]
         ship_parts = [
             parsed.get("ship_name") or "The Buffalo Works",
             parsed.get("ship_street1") or "",
@@ -379,10 +427,8 @@ def send_order_notification(order_number: str, parsed: dict, warnings: list[str]
         ship_addr = "\n".join(p for p in ship_parts if p.strip())
 
         lines = [f"Order: {order_number}", f"PO: {parsed['po_number']}", ""]
-        if qty_11:
-            lines.append(f"11oz:  {qty_11}")
-        if qty_15:
-            lines.append(f"15oz:  {qty_15}")
+        for item in build_order_items(parsed):
+            lines.append(f"{item['name']}:  {item['quantity']}")
         lines += ["", "Ship To:", ship_addr]
         if warnings:
             lines += ["", "Warnings:", *[f"- {w}" for w in warnings]]
@@ -458,7 +504,7 @@ def submit_order(order_number: str, parsed: dict) -> None:
             "carrierCode":    "fedex",
             "serviceCode":    "fedex_ground",
             "internalNotes":  build_notes(parsed["po_number"], file_urls, warnings),
-            **build_package(parsed["qty_11oz"], parsed["qty_15oz"]),
+            **package_for(parsed),
         })
 
         # 3. Success — notify, drop the pending entry, and refresh the dashboard
@@ -494,61 +540,100 @@ def submit():
     data = request.get_json(silent=True) or {}
     po_number = (data.get("po_number") or "").strip()
     uploaded = data.get("files") or []  # [{"name","url"}]
-
-    try:
-        qty_15oz = int(data.get("qty_15oz") or 0)
-        qty_11oz = int(data.get("qty_11oz") or 0)
-    except (ValueError, TypeError):
-        return {"error": "Quantities must be whole numbers."}, 400
+    is_replacement = bool(data.get("is_replacement"))
 
     if not po_number:
         return {"error": "PO number is required."}, 400
-    if qty_15oz == 0 and qty_11oz == 0:
-        return {"error": "Enter a quantity for at least one SKU."}, 400
     if not uploaded:
         return {"error": "No files were uploaded."}, 400
 
     file_urls = [(f["name"], f["url"]) for f in uploaded]
-    po_url = next(
-        (f["url"] for f in uploaded
-         if "purchase order" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
-        None,
-    )
-    address: dict = {}
-    po_bytes = None
-    if po_url:
-        try:
-            po_bytes = cloudinary_download(po_url)
-            address = parse_address_from_pdf(po_bytes)
-        except Exception:
-            pass
 
-    box_label = None
-    if po_bytes:
-        box_label = next(
-            (f for f in uploaded
-             if "box label" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
+    if is_replacement:
+        try:
+            qty_15oz_mug = int(data.get("qty_15oz_mug") or 0)
+            qty_11oz_mug = int(data.get("qty_11oz_mug") or 0)
+            qty_15oz_box = int(data.get("qty_15oz_box") or 0)
+            qty_11oz_box = int(data.get("qty_11oz_box") or 0)
+        except (ValueError, TypeError):
+            return {"error": "Quantities must be whole numbers."}, 400
+        if qty_15oz_mug == 0 and qty_11oz_mug == 0 and qty_15oz_box == 0 and qty_11oz_box == 0:
+            return {"error": "Enter a quantity for at least one item."}, 400
+
+        address_text = (data.get("address") or "").strip()
+        if not address_text:
+            return {"error": "Address is required for replacement orders."}, 400
+        address = parse_address_block(address_text)
+
+        parsed = {
+            "po_number":     po_number,
+            "is_replacement": True,
+            "qty_15oz_mug":  qty_15oz_mug,
+            "qty_11oz_mug":  qty_11oz_mug,
+            "qty_15oz_box":  qty_15oz_box,
+            "qty_11oz_box":  qty_11oz_box,
+            "ship_name":     address.get("ship_name"),
+            "ship_street1":  address.get("ship_street1"),
+            "ship_street2":  address.get("ship_street2"),
+            "ship_city":     address.get("ship_city"),
+            "ship_state":    address.get("ship_state"),
+            "ship_zip":      address.get("ship_zip"),
+            "ship_country":  address.get("ship_country", "US"),
+            "folder":        f"TBW-Orders/PO-{po_number}-REPLACEMENT",
+            "file_urls":     file_urls,
+            "po_bytes":      None,
+            "box_label":     None,
+        }
+        order_number = f"TBW-{po_number}-REPLACEMENT"
+
+    else:
+        try:
+            qty_15oz = int(data.get("qty_15oz") or 0)
+            qty_11oz = int(data.get("qty_11oz") or 0)
+        except (ValueError, TypeError):
+            return {"error": "Quantities must be whole numbers."}, 400
+        if qty_15oz == 0 and qty_11oz == 0:
+            return {"error": "Enter a quantity for at least one SKU."}, 400
+
+        po_url = next(
+            (f["url"] for f in uploaded
+             if "purchase order" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
             None,
         )
+        address = {}
+        po_bytes = None
+        if po_url:
+            try:
+                po_bytes = cloudinary_download(po_url)
+                address = parse_address_from_pdf(po_bytes)
+            except Exception:
+                pass
 
-    parsed = {
-        "po_number":    po_number,
-        "qty_15oz":     qty_15oz,
-        "qty_11oz":     qty_11oz,
-        "ship_name":    address.get("ship_name"),
-        "ship_street1": address.get("ship_street1"),
-        "ship_street2": address.get("ship_street2"),
-        "ship_city":    address.get("ship_city"),
-        "ship_state":   address.get("ship_state"),
-        "ship_zip":     address.get("ship_zip"),
-        "ship_country": address.get("ship_country", "US"),
-        "folder":       f"TBW-Orders/PO-{po_number}",
-        "file_urls":    file_urls,
-        "po_bytes":     po_bytes if box_label else None,
-        "box_label":    box_label,
-    }
+        box_label = None
+        if po_bytes:
+            box_label = next(
+                (f for f in uploaded
+                 if "box label" in f["name"].lower() and f["name"].lower().endswith(".pdf")),
+                None,
+            )
 
-    order_number = f"TBW-{po_number}"
+        parsed = {
+            "po_number":    po_number,
+            "qty_15oz":     qty_15oz,
+            "qty_11oz":     qty_11oz,
+            "ship_name":    address.get("ship_name"),
+            "ship_street1": address.get("ship_street1"),
+            "ship_street2": address.get("ship_street2"),
+            "ship_city":    address.get("ship_city"),
+            "ship_state":   address.get("ship_state"),
+            "ship_zip":     address.get("ship_zip"),
+            "ship_country": address.get("ship_country", "US"),
+            "folder":       f"TBW-Orders/PO-{po_number}",
+            "file_urls":    file_urls,
+            "po_bytes":     po_bytes if box_label else None,
+            "box_label":    box_label,
+        }
+        order_number = f"TBW-{po_number}"
     _submitting[order_number] = {
         "orderNumber": order_number,
         "orderDate":   datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
@@ -768,6 +853,10 @@ def order_friday(order: dict) -> date | None:
     return fri
 
 
+def is_replacement_order(order: dict) -> bool:
+    return (order.get("orderNumber") or "").endswith("-REPLACEMENT")
+
+
 def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -> list[dict]:
     """Line items (one per PO) for orders in the week ending week_end (Fri-noon-ET cutoff)."""
     rows: list[dict] = []
@@ -777,20 +866,28 @@ def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -
             continue
         info = shipments.get(o.get("orderNumber", ""), {})
 
-        q11 = q15 = 0
+        # Box-only replacement items carry no sku (priced at $0, but shipping
+        # still applies), so they're counted in qty but never priced here;
+        # replacement mugs are billed at 50% off.
+        q11 = q15 = box_qty = 0
         for it in o.get("items", []):
             sku = (it.get("sku") or "").lower()
-            if "11oz" in sku:
-                q11 += it.get("quantity", 0)
+            qty = it.get("quantity", 0)
+            if "BOX ONLY" in (it.get("name") or "").upper():
+                box_qty += qty
+            elif "11oz" in sku:
+                q11 += qty
             elif "15oz" in sku:
-                q15 += it.get("quantity", 0)
+                q15 += qty
+        price_mult = 0.5 if is_replacement_order(o) else 1.0
 
-        subtotal = q11 * PRICE_11OZ + q15 * PRICE_15OZ
+        subtotal = (q11 * PRICE_11OZ + q15 * PRICE_15OZ) * price_mult
         shipping = round(info.get("cost", 0.0), 2)
-        price = PRICE_11OZ if (q11 and not q15) else PRICE_15OZ if (q15 and not q11) else 0.0
+        price = (PRICE_11OZ if (q11 and not q15 and not box_qty) else
+                 PRICE_15OZ if (q15 and not q11 and not box_qty) else 0.0) * price_mult
         rows.append({
             "po": o["orderNumber"].replace("TBW-", ""),
-            "qty": q11 + q15, "price": price,
+            "qty": q11 + q15 + box_qty, "price": price,
             "subtotal": round(subtotal, 2), "shipping": shipping,
             "total": round(subtotal + shipping, 2),
         })
@@ -823,7 +920,8 @@ def build_all_invoices() -> list[dict]:
                 q11 += it.get("quantity", 0)
             elif "15oz" in sku:
                 q15 += it.get("quantity", 0)
-        total = q11 * PRICE_11OZ + q15 * PRICE_15OZ + round(info.get("cost", 0.0), 2)
+        price_mult = 0.5 if is_replacement_order(o) else 1.0
+        total = (q11 * PRICE_11OZ + q15 * PRICE_15OZ) * price_mult + round(info.get("cost", 0.0), 2)
         totals[friday] = totals.get(friday, 0.0) + total
 
     fridays = sorted(totals)  # ascending; only weeks with orders
