@@ -840,12 +840,8 @@ def ship_friday(order: dict, shipments: dict) -> date | None:
     they actually ship in, even if that's later than the week they were
     placed or than a prior week's invoice was expecting them.
 
-    Ship dates Sat-Thu land on that week's Friday invoice as usual. A Friday
-    ship date rolls to the *following* week instead of its own: the auto-
-    finalize job closes the book at Friday noon ET, and an order can ship
-    any time that day, including after noon -- if Friday counted toward its
-    own week, an order shipping Friday afternoon could be assigned to a week
-    that's already frozen and never appear on any invoice at all."""
+    Ship dates Sat-Thu land on that week's Friday invoice. A Friday ship date
+    always rolls to the *following* week's invoice instead of its own."""
     sd = shipments.get(order.get("orderNumber", ""), {}).get("ship_date", "")
     if not sd:
         return None
@@ -950,7 +946,12 @@ def build_all_invoices() -> list[dict]:
     state = load_invoice_state()
     claimed = _claimed_pos(state)
 
-    last_friday = most_recent_friday()
+    # A Friday ship date rolls one week past its natural week (see ship_friday),
+    # so the week that's *currently* accruing that rolled-forward content is
+    # one week ahead of the most recently closed Friday -- allow up to there,
+    # or a Friday shipping today would roll into a week that gets excluded
+    # entirely instead of showing up as the active invoice.
+    last_friday = most_recent_friday() + timedelta(days=7)
     totals: dict[date, float] = {}
     for o in orders:
         if o["orderNumber"].replace("TBW-", "") in claimed:
@@ -1002,8 +1003,7 @@ def finalize_week(friday: date) -> None:
     with ThreadPoolExecutor(max_workers=2) as ex:
         orders = ex.submit(fetch_orders).result()
         shipments = ex.submit(fetch_all_shipments).result()
-    claimed = _claimed_pos(load_invoice_state())
-    rows = invoice_rows_for_week(friday, orders, shipments, claimed)
+    rows = invoice_rows_for_week(friday, orders, shipments, _claimed_pos(load_invoice_state()))
     if not rows:
         return
 
