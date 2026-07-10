@@ -872,10 +872,27 @@ def _manual_order_totals(order: dict) -> tuple[float, int]:
     return round(subtotal, 2), qty
 
 
-def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -> list[dict]:
+def _claimed_pos(state: dict) -> set[str]:
+    """PO numbers already locked into some finalized week's frozen rows. Must
+    be excluded from every other week's live computation -- otherwise an
+    order can get double-counted if the bucketing rule (ship_friday) changes
+    after that order's week was finalized under the old rule, and the order
+    now maps to a different, still-live week."""
+    claimed: set[str] = set()
+    for rec in state.values():
+        if rec.get("final"):
+            claimed.update(row["po"] for row in rec.get("rows", []))
+    return claimed
+
+
+def invoice_rows_for_week(
+    week_end: date, orders: list[dict], shipments: dict, claimed: set[str] = frozenset(),
+) -> list[dict]:
     """Line items (one per PO) for orders that shipped in the Sat-Fri week ending week_end."""
     rows: list[dict] = []
     for o in orders:
+        if o["orderNumber"].replace("TBW-", "") in claimed:
+            continue
         fw = ship_friday(o, shipments)
         if fw is None or invoice_week(fw) != week_end:
             continue
@@ -930,9 +947,14 @@ def build_all_invoices() -> list[dict]:
         orders = ex.submit(fetch_orders).result()
         shipments = ex.submit(fetch_all_shipments).result()
 
+    state = load_invoice_state()
+    claimed = _claimed_pos(state)
+
     last_friday = most_recent_friday()
     totals: dict[date, float] = {}
     for o in orders:
+        if o["orderNumber"].replace("TBW-", "") in claimed:
+            continue
         friday = ship_friday(o, shipments)
         if friday is None or friday < FIRST_INVOICE_FRIDAY or friday > last_friday:
             continue
@@ -957,7 +979,6 @@ def build_all_invoices() -> list[dict]:
         totals[friday] = totals.get(friday, 0.0) + total
 
     fridays = sorted(totals)  # ascending; only weeks with orders
-    state = load_invoice_state()
     out: list[dict] = []
     for i, friday in enumerate(fridays):
         is_latest = i == len(fridays) - 1
@@ -981,7 +1002,8 @@ def finalize_week(friday: date) -> None:
     with ThreadPoolExecutor(max_workers=2) as ex:
         orders = ex.submit(fetch_orders).result()
         shipments = ex.submit(fetch_all_shipments).result()
-    rows = invoice_rows_for_week(friday, orders, shipments)
+    claimed = _claimed_pos(load_invoice_state())
+    rows = invoice_rows_for_week(friday, orders, shipments, claimed)
     if not rows:
         return
 
@@ -1065,7 +1087,8 @@ def invoices_pdf():
         return redirect(url_for("invoices"))
 
     # Use the frozen snapshot for finalized weeks; otherwise compute live
-    rec = load_invoice_state().get(week_end.isoformat(), {})
+    state = load_invoice_state()
+    rec = state.get(week_end.isoformat(), {})
     if rec.get("final") and rec.get("rows"):
         rows = rec["rows"]
         number = str(rec["number"])
@@ -1073,7 +1096,7 @@ def invoices_pdf():
         with ThreadPoolExecutor(max_workers=2) as ex:
             orders = ex.submit(fetch_orders).result()
             shipments = ex.submit(fetch_all_shipments).result()
-        rows = invoice_rows_for_week(week_end, orders, shipments)
+        rows = invoice_rows_for_week(week_end, orders, shipments, _claimed_pos(state))
         number = next(
             (str(inv["number"]) for inv in build_all_invoices() if inv["week_iso"] == week_end.isoformat()),
             "",
