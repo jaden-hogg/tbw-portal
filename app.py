@@ -752,6 +752,12 @@ ACTIVE_INVOICES = 4                      # most recent 4 stay un-archived
 FIRST_INVOICE_FRIDAY = date(2026, 1, 23)  # invoice #1 — first week invoiced
 PATRIOTIC_WEEK = date(2026, 6, 26)  # America's 250th — red/white/blue theme, this week only
 
+# Manual orders priced directly from their real ShipStation line-item unit
+# prices (qty * unitPrice) instead of the TBW-11oz/15oz placeholder-SKU model —
+# for one-off orders (e.g. blank product, not the usual custom mugs) entered
+# straight into ShipStation rather than through the portal form.
+_MANUALLY_PRICED_ORDERS = {"TBW-BLANKS"}  # 2026-07-10: blank mugs $1.75 + blank boxes $0.50
+
 STATUS_LABELS = {
     "ready":     "Ready – Not Paid",
     "submitted": "Payment Submitted",
@@ -849,6 +855,15 @@ def is_replacement_order(order: dict) -> bool:
     return (order.get("orderNumber") or "").endswith("-REPLACEMENT")
 
 
+def _manual_order_totals(order: dict) -> tuple[float, int]:
+    """(subtotal, qty) for a _MANUALLY_PRICED_ORDERS order, straight from its
+    real ShipStation line-item quantities and unit prices."""
+    items = order.get("items", [])
+    subtotal = sum(it.get("quantity", 0) * (it.get("unitPrice") or 0) for it in items)
+    qty = sum(it.get("quantity", 0) for it in items)
+    return round(subtotal, 2), qty
+
+
 def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -> list[dict]:
     """Line items (one per PO) for orders in the week ending week_end (Fri-noon-ET cutoff)."""
     rows: list[dict] = []
@@ -857,6 +872,17 @@ def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -
         if fw is None or invoice_week(fw) != week_end:
             continue
         info = shipments.get(o.get("orderNumber", ""), {})
+        shipping = round(info.get("cost", 0.0), 2)
+
+        if o.get("orderNumber") in _MANUALLY_PRICED_ORDERS:
+            subtotal, qty = _manual_order_totals(o)
+            rows.append({
+                "po": o["orderNumber"].replace("TBW-", ""),
+                "qty": qty, "price": 0.0,
+                "subtotal": subtotal, "shipping": shipping,
+                "total": round(subtotal + shipping, 2),
+            })
+            continue
 
         # Box-only replacement items carry no sku (priced at $0, but shipping
         # still applies), so they're counted in qty but never priced here;
@@ -874,7 +900,6 @@ def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -
         price_mult = 0.5 if is_replacement_order(o) else 1.0
 
         subtotal = (q11 * PRICE_11OZ + q15 * PRICE_15OZ) * price_mult
-        shipping = round(info.get("cost", 0.0), 2)
         price = (PRICE_11OZ if (q11 and not q15 and not box_qty) else
                  PRICE_15OZ if (q15 and not q11 and not box_qty) else 0.0) * price_mult
         rows.append({
@@ -905,6 +930,13 @@ def build_all_invoices() -> list[dict]:
             continue
         friday = invoice_week(friday)  # fold combined weeks together
         info = shipments.get(o.get("orderNumber", ""), {})
+        shipping = round(info.get("cost", 0.0), 2)
+
+        if o.get("orderNumber") in _MANUALLY_PRICED_ORDERS:
+            subtotal, _qty = _manual_order_totals(o)
+            totals[friday] = totals.get(friday, 0.0) + subtotal + shipping
+            continue
+
         q11 = q15 = 0
         for it in o.get("items", []):
             sku = (it.get("sku") or "").lower()
@@ -913,7 +945,7 @@ def build_all_invoices() -> list[dict]:
             elif "15oz" in sku:
                 q15 += it.get("quantity", 0)
         price_mult = 0.5 if is_replacement_order(o) else 1.0
-        total = (q11 * PRICE_11OZ + q15 * PRICE_15OZ) * price_mult + round(info.get("cost", 0.0), 2)
+        total = (q11 * PRICE_11OZ + q15 * PRICE_15OZ) * price_mult + shipping
         totals[friday] = totals.get(friday, 0.0) + total
 
     fridays = sorted(totals)  # ascending; only weeks with orders
