@@ -834,21 +834,19 @@ def invoice_week(friday: date) -> date:
     return _COMBINED_INTO.get(friday, friday)
 
 
-def order_friday(order: dict) -> date | None:
-    """Week-ending Friday an order belongs to, using a Friday-noon-ET cutoff.
-    Orders placed after noon ET on Friday roll to the following week."""
-    od = order.get("orderDate", "")
-    if not od:
+def ship_friday(order: dict, shipments: dict) -> date | None:
+    """Week-ending Friday (Sat-Fri) an order's ship date falls in. Orders that
+    haven't shipped yet don't belong to any week -- they show up on whichever
+    week they actually ship in, even if that's later than the week they were
+    placed or than a prior week's invoice was expecting them."""
+    sd = shipments.get(order.get("orderNumber", ""), {}).get("ship_date", "")
+    if not sd:
         return None
     try:
-        dt = datetime.fromisoformat(od[:19])  # ShipStation orderDate is ET, naive
+        d = datetime.fromisoformat(sd[:19]).date()  # ShipStation shipDate is ET, naive
     except ValueError:
         return None
-    d = dt.date()
-    fri = d + timedelta(days=(4 - d.weekday()) % 7)  # this week's Friday
-    if d == fri and dt.hour >= 12:                   # Friday afternoon → next week
-        fri += timedelta(days=7)
-    return fri
+    return d + timedelta(days=(4 - d.weekday()) % 7)  # that week's Friday
 
 
 def is_replacement_order(order: dict) -> bool:
@@ -865,10 +863,10 @@ def _manual_order_totals(order: dict) -> tuple[float, int]:
 
 
 def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -> list[dict]:
-    """Line items (one per PO) for orders in the week ending week_end (Fri-noon-ET cutoff)."""
+    """Line items (one per PO) for orders that shipped in the Sat-Fri week ending week_end."""
     rows: list[dict] = []
     for o in orders:
-        fw = order_friday(o)
+        fw = ship_friday(o, shipments)
         if fw is None or invoice_week(fw) != week_end:
             continue
         info = shipments.get(o.get("orderNumber", ""), {})
@@ -925,7 +923,7 @@ def build_all_invoices() -> list[dict]:
     last_friday = most_recent_friday()
     totals: dict[date, float] = {}
     for o in orders:
-        friday = order_friday(o)
+        friday = ship_friday(o, shipments)
         if friday is None or friday < FIRST_INVOICE_FRIDAY or friday > last_friday:
             continue
         friday = invoice_week(friday)  # fold combined weeks together
