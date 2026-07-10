@@ -1040,6 +1040,21 @@ def invoices_save():
     return redirect(url_for("invoices"))
 
 
+@app.route("/invoices/unfinalize", methods=["POST"])
+@login_required
+def invoices_unfinalize():
+    """Un-freeze a finalized week so it recomputes live (number/total/rows) on
+    next load -- e.g. when a bucketing-logic fix needs to reshuffle a week
+    that was already finalized under the old logic. Keeps the week's status."""
+    week_iso = request.form.get("week_iso", "").strip()
+    if week_iso:
+        state = dict(load_invoice_state())
+        if week_iso in state:
+            state[week_iso] = {"status": state[week_iso].get("status", "ready")}
+            save_invoice_state(state)
+    return redirect(url_for("invoices"))
+
+
 @app.route("/invoices/pdf")
 @login_required
 def invoices_pdf():
