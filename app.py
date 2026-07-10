@@ -835,10 +835,17 @@ def invoice_week(friday: date) -> date:
 
 
 def ship_friday(order: dict, shipments: dict) -> date | None:
-    """Week-ending Friday (Sat-Fri) an order's ship date falls in. Orders that
-    haven't shipped yet don't belong to any week -- they show up on whichever
-    week they actually ship in, even if that's later than the week they were
-    placed or than a prior week's invoice was expecting them."""
+    """Week-ending Friday an order's ship date belongs to. Orders that haven't
+    shipped yet don't belong to any week -- they show up on whichever week
+    they actually ship in, even if that's later than the week they were
+    placed or than a prior week's invoice was expecting them.
+
+    Ship dates Sat-Thu land on that week's Friday invoice as usual. A Friday
+    ship date rolls to the *following* week instead of its own: the auto-
+    finalize job closes the book at Friday noon ET, and an order can ship
+    any time that day, including after noon -- if Friday counted toward its
+    own week, an order shipping Friday afternoon could be assigned to a week
+    that's already frozen and never appear on any invoice at all."""
     sd = shipments.get(order.get("orderNumber", ""), {}).get("ship_date", "")
     if not sd:
         return None
@@ -846,7 +853,10 @@ def ship_friday(order: dict, shipments: dict) -> date | None:
         d = datetime.fromisoformat(sd[:19]).date()  # ShipStation shipDate is ET, naive
     except ValueError:
         return None
-    return d + timedelta(days=(4 - d.weekday()) % 7)  # that week's Friday
+    fri = d + timedelta(days=(4 - d.weekday()) % 7)  # that week's Friday
+    if d.weekday() == 4:                             # Friday ship date → next week
+        fri += timedelta(days=7)
+    return fri
 
 
 def is_replacement_order(order: dict) -> bool:
