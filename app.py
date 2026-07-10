@@ -834,6 +834,16 @@ def invoice_week(friday: date) -> date:
     return _COMBINED_INTO.get(friday, friday)
 
 
+# Weeks excluded entirely from invoice history -- never appear as an invoice
+# line, in a PDF, or in any total, even if orders still map to that week.
+_EXCLUDED_WEEKS = {
+    # Its only content was 2 orders misassigned by the pre-fix ship-date
+    # bucketing bug (fixed 2026-07-10); their real ship date correctly
+    # lands them on 7/10 instead. Removed rather than recomputed live.
+    date(2026, 7, 3),
+}
+
+
 def ship_friday(order: dict, shipments: dict) -> date | None:
     """Week-ending Friday an order's ship date belongs to. Orders that haven't
     shipped yet don't belong to any week -- they show up on whichever week
@@ -874,6 +884,8 @@ def _manual_order_totals(order: dict) -> tuple[float, int]:
 
 def invoice_rows_for_week(week_end: date, orders: list[dict], shipments: dict) -> list[dict]:
     """Line items (one per PO) for orders that shipped in the Sat-Fri week ending week_end."""
+    if week_end in _EXCLUDED_WEEKS:
+        return []
     rows: list[dict] = []
     for o in orders:
         fw = ship_friday(o, shipments)
@@ -937,6 +949,8 @@ def build_all_invoices() -> list[dict]:
         if friday is None or friday < FIRST_INVOICE_FRIDAY or friday > last_friday:
             continue
         friday = invoice_week(friday)  # fold combined weeks together
+        if friday in _EXCLUDED_WEEKS:
+            continue
         info = shipments.get(o.get("orderNumber", ""), {})
         shipping = round(info.get("cost", 0.0), 2)
 
