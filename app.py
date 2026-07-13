@@ -995,7 +995,12 @@ def build_all_invoices() -> list[dict]:
         total = (q11 * PRICE_11OZ + q15 * PRICE_15OZ) * price_mult + shipping
         totals[friday] = totals.get(friday, 0.0) + total
 
-    fridays = [f for f in sorted(totals) if _week_visible(f)]  # ascending; visible weeks with orders
+    # A finalized week's own orders are all "claimed" by its own frozen rows
+    # (see _claimed_pos), so they never repopulate `totals` for that date --
+    # the slot has to be added back explicitly or a fully-finalized week
+    # would vanish from the list instead of showing its frozen snapshot.
+    finalized_weeks = {date.fromisoformat(k) for k, v in state.items() if v.get("final")}
+    fridays = [f for f in sorted(set(totals) | finalized_weeks) if _week_visible(f)]
     out: list[dict] = []
     for i, friday in enumerate(fridays):
         is_latest = i == len(fridays) - 1
