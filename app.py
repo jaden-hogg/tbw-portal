@@ -834,6 +834,22 @@ def invoice_week(friday: date) -> date:
     return _COMBINED_INTO.get(friday, friday)
 
 
+def _week_visible(friday: date) -> bool:
+    """A week's invoice row doesn't appear until 8am ET on its own ending
+    Friday. Ship-date bucketing can populate a week's total well before that
+    week has actually happened -- a Friday ship date always rolls a full
+    week forward (see ship_friday), so the *next* week's bucket can already
+    have orders in it the moment something ships this Friday. Gating display
+    keeps that upcoming invoice out of sight until it's actually ready to be
+    worked, rather than showing up mid-week as a partial, changing total."""
+    now = datetime.now(ET)
+    if friday < now.date():
+        return True
+    if friday == now.date():
+        return now.hour >= 8
+    return False
+
+
 def ship_friday(order: dict, shipments: dict) -> date | None:
     """Week-ending Friday an order's ship date belongs to. Orders that haven't
     shipped yet don't belong to any week -- they show up on whichever week
@@ -979,7 +995,7 @@ def build_all_invoices() -> list[dict]:
         total = (q11 * PRICE_11OZ + q15 * PRICE_15OZ) * price_mult + shipping
         totals[friday] = totals.get(friday, 0.0) + total
 
-    fridays = sorted(totals)  # ascending; only weeks with orders
+    fridays = [f for f in sorted(totals) if _week_visible(f)]  # ascending; visible weeks with orders
     out: list[dict] = []
     for i, friday in enumerate(fridays):
         is_latest = i == len(fridays) - 1
