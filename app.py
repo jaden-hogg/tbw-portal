@@ -470,6 +470,16 @@ def push_to_production_dashboard(order_number: str, parsed: dict, file_urls: lis
         )
         items = build_order_items(parsed)
         product_summary = ", ".join(f"{i['name']} x{i['quantity']}" for i in items)
+        # No real product_skus catalog SKU exists for TBW-11oz/TBW-15oz (or the box-only
+        # replacement items) — sku/variant stay None; the dashboard hardcodes TBW's print
+        # method to Sublimation rather than trying to resolve it from a SKU that isn't there.
+        line_items = [
+            {"sku": None, "name": i["name"], "variant": None, "quantity": i["quantity"]}
+            for i in items
+        ]
+        notes = f"PO {parsed['po_number']}"
+        if parsed.get("customer_notes"):
+            notes += f"\n\n{parsed['customer_notes']}"
         requests.post(
             f"{PRODUCTION_PORTAL_URL}/admin/production-orders",
             headers={"X-Production-Token": PRODUCTION_INGEST_TOKEN},
@@ -479,7 +489,8 @@ def push_to_production_dashboard(order_number: str, parsed: dict, file_urls: lis
                 "customer_name": _shop_from_text("\n".join(n for n, _ in file_urls)) or "The Buffalo Works",
                 "order_date": datetime.now(ET).strftime("%Y-%m-%d"),
                 "product_summary": product_summary,
-                "notes": f"PO {parsed['po_number']}",
+                "line_items": line_items,
+                "notes": notes,
                 "print_file_url": box_label_url,
                 "external_status": "awaiting_shipment",
             },

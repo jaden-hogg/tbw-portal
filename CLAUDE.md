@@ -87,6 +87,8 @@ Right after the ShipStation order lands (`submit_order()`, same success path as 
 
 Silently skips (no exception, no blocked order) if `PRODUCTION_PORTAL_URL`/`PRODUCTION_INGEST_TOKEN` aren't set — same "missing creds = no-op" convention as the Gmail notification just above. Auth is `X-Production-Token`, a token distinct from any other credential in this app.
 
+**Extended (2026-07-16)** to also send a structured `line_items` list (`[{sku: null, name, variant: null, quantity}]` — one entry per `build_order_items()` line; no `sku` since `TBW-11oz`/`TBW-15oz` aren't in the dashboard's own product catalog) so the dashboard can show a real product-breakdown dropdown instead of parsing the flat text summary. `notes` now also includes the New Order form's free-text Customer Notes field (`parsed["customer_notes"]`) when Tyler filled it in, alongside the PO number — this is the "order notes" the dashboard surfaces for TBW rows.
+
 ## Environment variables (set in Railway → Variables, NOT Keychain)
 | Variable | Purpose |
 |---|---|
