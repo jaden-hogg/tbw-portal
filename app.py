@@ -294,8 +294,16 @@ def index():
     return render_template("upload.html")
 
 
-def build_notes(po_number: str, file_urls: list[tuple[str, str]], warnings: list[str]) -> str:
-    sections = [f"PO {po_number}"]
+def build_notes(
+    po_number: str,
+    file_urls: list[tuple[str, str]],
+    warnings: list[str],
+    customer_notes: str | None = None,
+) -> str:
+    sections = []
+    if customer_notes:
+        sections.append("CUSTOMER NOTES\n" + customer_notes)
+    sections.append(f"PO {po_number}")
     if file_urls:
         sections.append("FILES\n\n" + "\n\n".join(f"{name}\n{url}" for name, url in file_urls))
     if warnings:
@@ -536,7 +544,7 @@ def submit_order(order_number: str, parsed: dict) -> None:
             "shippingAmount": 0.00,
             "carrierCode":    "fedex",
             "serviceCode":    "fedex_ground",
-            "internalNotes":  build_notes(parsed["po_number"], file_urls, warnings),
+            "internalNotes":  build_notes(parsed["po_number"], file_urls, warnings, parsed.get("customer_notes")),
             **package_for(parsed),
         })
 
@@ -576,6 +584,7 @@ def submit():
     po_number = (data.get("po_number") or "").strip()
     uploaded = data.get("files") or []  # [{"name","url"}]
     is_replacement = bool(data.get("is_replacement"))
+    customer_notes = (data.get("customer_notes") or "").strip() or None
 
     if not po_number:
         return {"error": "PO number is required."}, 400
@@ -638,6 +647,7 @@ def submit():
             "file_urls":     file_urls,
             "po_bytes":      po_bytes if box_label else None,
             "box_label":     box_label,
+            "customer_notes": customer_notes,
         }
         order_number = f"TBW-{po_number}-REPLACEMENT"
 
@@ -665,6 +675,7 @@ def submit():
             "file_urls":    file_urls,
             "po_bytes":     po_bytes if box_label else None,
             "box_label":    box_label,
+            "customer_notes": customer_notes,
         }
         order_number = f"TBW-{po_number}"
     _submitting[order_number] = {

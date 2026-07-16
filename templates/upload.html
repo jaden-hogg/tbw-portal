@@ -59,6 +59,11 @@
           <div class="form-text">Box labels, art transfers, packing slip, PO, thumbnails.</div>
         </div>
 
+        <div class="mb-4">
+          <label class="form-label fw-semibold">Notes <span class="text-muted fw-normal">(optional)</span></label>
+          <textarea id="customer_notes" class="form-control" rows="3" placeholder="Anything HOGG should know about this order"></textarea>
+        </div>
+
         <button type="button" id="preview-btn" class="btn btn-success w-100">Preview</button>
       </div>
     </div>
@@ -84,6 +89,11 @@
 
         <div class="section-label mb-2">Attached Files</div>
         <ul class="list-unstyled mb-4" id="rv-files"></ul>
+
+        <div class="mb-4 d-none" id="rv-notes-wrap">
+          <div class="section-label mb-2">Notes</div>
+          <p class="small mb-0" id="rv-notes"></p>
+        </div>
 
         <div class="d-flex gap-2">
           <button type="button" id="confirm-btn" class="btn btn-success flex-grow-1">Confirm</button>
@@ -170,6 +180,10 @@
     $('rv-items').innerHTML = itemsHtml;
     $('rv-files').innerHTML = files.map(f => `<li class="small text-muted">${f.name}</li>`).join('');
 
+    const notes = $('customer_notes').value.trim();
+    $('rv-notes-wrap').classList.toggle('d-none', !notes);
+    $('rv-notes').textContent = notes;
+
     formCard.classList.add('d-none');
     reviewCard.classList.remove('d-none');
   });
@@ -213,7 +227,12 @@
 
       // 3. Create the order
       progress.textContent = 'Submitting…';
-      const payload = { po_number: po, is_replacement: isReplacement, files: results };
+      const payload = {
+        po_number: po,
+        is_replacement: isReplacement,
+        files: results,
+        customer_notes: $('customer_notes').value.trim(),
+      };
       if (isReplacement) {
         payload.qty_15oz_mug = parseInt($('qty_15oz_mug').value || '0', 10);
         payload.qty_11oz_mug = parseInt($('qty_11oz_mug').value || '0', 10);

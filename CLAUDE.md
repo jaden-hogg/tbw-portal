@@ -73,9 +73,11 @@ Box size and weight are set automatically at order creation based on qty.
 Mixed 11oz + 15oz orders default to 18×16×14 with combined weight.
 
 ## ShipStation notes format
-`PO <number>` + a `FILES` section (filename + Cloudinary URL per line) + a `NOTES`
-section only if there were box-label warnings. The box-label link points to the
-expanded PDF.
+An optional `CUSTOMER NOTES` section (from the New Order form's free-text Notes field,
+2026-07-16) at the very top, only if Tyler filled it in — then `PO <number>` + a `FILES`
+section (filename + Cloudinary URL per line) + a `NOTES` section only if there were
+box-label warnings. The box-label link points to the expanded PDF. Same field exists on
+the Replacement Order flow (shared form fields below the qty inputs).
 
 ## Order notification email
 When a ShipStation order is successfully created, an email is sent to `mugs@hoggoutfitters.com` (subject: `New TBW Order: TBW-XXXXX`) with the PO number, quantities, and ship-to address. Uses Gmail OAuth2 via the same raw-token pattern as the rest of the workspace. If Gmail credentials are missing, the notification silently skips (does not block order creation).
