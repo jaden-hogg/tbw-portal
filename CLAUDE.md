@@ -80,6 +80,11 @@ expanded PDF.
 ## Order notification email
 When a ShipStation order is successfully created, an email is sent to `mugs@hoggoutfitters.com` (subject: `New TBW Order: TBW-XXXXX`) with the PO number, quantities, and ship-to address. Uses Gmail OAuth2 via the same raw-token pattern as the rest of the workspace. If Gmail credentials are missing, the notification silently skips (does not block order creation).
 
+## Push to the Production Dashboard (2026-07-16)
+Right after the ShipStation order lands (`submit_order()`, same success path as the notification email above), also POSTs the order into `custom-order-portal`'s production dashboard (`push_to_production_dashboard()`) — `source: "tbw"`, `source_ref` = the ShipStation `orderNumber`, customer name (via the same `_shop_from_text()` helper the dashboard's own "Ship To" column already uses), product summary from `build_order_items()`, PO number as notes, and the **already-expanded** box-label Cloudinary URL as `print_file_url` (found the same way `box_label` is detected elsewhere in this file — `"box label" in name.lower()` + `.pdf`). This is why the push happens from here rather than the dashboard re-parsing `internalNotes` later: this app already has the clean structured data in hand at this exact point.
+
+Silently skips (no exception, no blocked order) if `PRODUCTION_PORTAL_URL`/`PRODUCTION_INGEST_TOKEN` aren't set — same "missing creds = no-op" convention as the Gmail notification just above. Auth is `X-Production-Token`, a token distinct from any other credential in this app.
+
 ## Environment variables (set in Railway → Variables, NOT Keychain)
 | Variable | Purpose |
 |---|---|
@@ -87,6 +92,7 @@ When a ShipStation order is successfully created, an email is sent to `mugs@hogg
 | `FLASK_SECRET_KEY` | session signing (`python3 -c "import secrets; print(secrets.token_hex(32))"`) |
 | `SHIPSTATION_V1_API_KEY` / `SHIPSTATION_V1_API_SECRET` | ShipStation |
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | file storage |
+| `PRODUCTION_PORTAL_URL` / `PRODUCTION_INGEST_TOKEN` | custom-order-portal's production dashboard push (optional — silently skipped if unset) |
 | `ANTHROPIC_API_KEY` | box-label vision matching |
 | `MATCH_MODEL` | vision model (set to `claude-haiku-4-5` — cheap, accurate for bold phrases) |
 | `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | Gmail OAuth2 for order notifications |

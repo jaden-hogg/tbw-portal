@@ -46,6 +46,11 @@ NOTIFY_EMAIL      = "mugs@hoggoutfitters.com"
 GMAIL_CLIENT_ID     = os.environ.get("GMAIL_CLIENT_ID", "")
 GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET", "")
 GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN", "")
+# custom-order-portal's production dashboard (2026-07-16) — pushed to on order creation so
+# the dashboard has this order's data without re-deriving it later from ShipStation's own
+# free-text internalNotes. Optional/silently-skipped if unset, same as the Gmail vars above.
+PRODUCTION_PORTAL_URL   = os.environ.get("PRODUCTION_PORTAL_URL", "")
+PRODUCTION_INGEST_TOKEN = os.environ.get("PRODUCTION_INGEST_TOKEN", "")
 
 # Server-side store for pending orders (avoids 4KB cookie session limit)
 _pending_orders: dict[str, dict] = {}
@@ -441,6 +446,41 @@ def send_order_notification(order_number: str, parsed: dict, warnings: list[str]
         print(f"[notify] email failed for {order_number}: {e}", flush=True)
 
 
+def push_to_production_dashboard(order_number: str, parsed: dict, file_urls: list[tuple[str, str]]) -> None:
+    """Pushes this order into custom-order-portal's production dashboard right after it
+    lands in ShipStation, using the same structured data (parsed, the already-expanded
+    box-label URL) that build_notes() would otherwise serialize into a free-text notes
+    blob — the dashboard gets it directly instead of having to parse that text back out
+    later. Silently skips if unconfigured; never raises (a dashboard outage must never
+    block an actual order from being created)."""
+    if not (PRODUCTION_PORTAL_URL and PRODUCTION_INGEST_TOKEN):
+        return
+    try:
+        box_label_url = next(
+            (u for n, u in file_urls if "box label" in n.lower() and n.lower().endswith(".pdf")),
+            None,
+        )
+        items = build_order_items(parsed)
+        product_summary = ", ".join(f"{i['name']} x{i['quantity']}" for i in items)
+        requests.post(
+            f"{PRODUCTION_PORTAL_URL}/admin/production-orders",
+            headers={"X-Production-Token": PRODUCTION_INGEST_TOKEN},
+            json={
+                "source": "tbw",
+                "source_ref": order_number,
+                "customer_name": _shop_from_text("\n".join(n for n, _ in file_urls)) or "The Buffalo Works",
+                "order_date": datetime.now(ET).strftime("%Y-%m-%d"),
+                "product_summary": product_summary,
+                "notes": f"PO {parsed['po_number']}",
+                "print_file_url": box_label_url,
+                "external_status": "awaiting_shipment",
+            },
+            timeout=15,
+        )
+    except Exception as e:
+        print(f"[production-push] failed for {order_number}: {e}", flush=True)
+
+
 def submit_order(order_number: str, parsed: dict) -> None:
     """
     Background task run after confirm. Uploads every file to Cloudinary
@@ -500,8 +540,10 @@ def submit_order(order_number: str, parsed: dict) -> None:
             **package_for(parsed),
         })
 
-        # 3. Success — notify, drop the pending entry, and refresh the dashboard
+        # 3. Success — notify, push to the production dashboard, drop the pending entry,
+        #    and refresh the dashboard
         send_order_notification(order_number, parsed, warnings)
+        push_to_production_dashboard(order_number, parsed, file_urls)
         _submitting.pop(order_number, None)
         invalidate_dashboard_cache()
     except Exception as e:  # noqa: BLE001
