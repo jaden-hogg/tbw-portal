@@ -91,13 +91,13 @@ Silently skips (no exception, no blocked order) if `PRODUCTION_PORTAL_URL`/`PROD
 
 **Extended (2026-07-16)** to also send a structured `line_items` list (`[{sku: null, name, variant: null, quantity}]` — one entry per `build_order_items()` line; no `sku` since `TBW-11oz`/`TBW-15oz` aren't in the dashboard's own product catalog) so the dashboard can show a real product-breakdown dropdown instead of parsing the flat text summary. `notes` now also includes the New Order form's free-text Customer Notes field (`parsed["customer_notes"]`) when Tyler filled it in, alongside the PO number — this is the "order notes" the dashboard surfaces for TBW rows.
 
-## Environment variables (set in Railway → Variables, NOT Keychain)
+## Environment variables (set in Railway → Variables)
 | Variable | Purpose |
 |---|---|
-| `PORTAL_PASSWORD` | dashboard login |
-| `FLASK_SECRET_KEY` | session signing (`python3 -c "import secrets; print(secrets.token_hex(32))"`) |
-| `SHIPSTATION_V1_API_KEY` / `SHIPSTATION_V1_API_SECRET` | ShipStation |
-| `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | file storage |
+| `PORTAL_PASSWORD` | dashboard login — Railway only, not in Keychain |
+| `FLASK_SECRET_KEY` | session signing (`python3 -c "import secrets; print(secrets.token_hex(32))"`) — Railway only |
+| `SHIPSTATION_V1_API_KEY` / `SHIPSTATION_V1_API_SECRET` | ShipStation — also in Keychain (shared workspace credential) |
+| `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | file storage — the `hogg-outfitters` account, also in Keychain under these exact names (shared with `image-pipeline`), so scripts run locally can read/write this app's Cloudinary-hosted `invoice_state` JSON directly without Railway CLI access |
 | `PRODUCTION_PORTAL_URL` / `PRODUCTION_INGEST_TOKEN` | custom-order-portal's production dashboard push (optional — silently skipped if unset) |
 | `ANTHROPIC_API_KEY` | box-label vision matching |
 | `MATCH_MODEL` | vision model (set to `claude-haiku-4-5` — cheap, accurate for bold phrases) |
