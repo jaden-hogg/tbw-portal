@@ -24,3 +24,31 @@ If a similar "a frozen/manually-merged week reverted to live numbers"
 symptom recurs, check whether `/invoices/save` (or any other write path to
 `invoice_state`) clobbered the record before assuming the bucketing logic
 changed.
+
+## Production dashboard push silently broken, 2026-07-22
+`PRODUCTION_PORTAL_URL` in Railway Variables was set to
+`https://custom-order-portal-production.up.railway.app/admin/production` —
+already including the `/admin/production` path. `push_to_production_dashboard()`
+builds the request as `f"{PRODUCTION_PORTAL_URL}/admin/production-orders"`, so
+every push actually hit
+`.../admin/production/admin/production-orders` — not a real route, 404.
+`requests.post()` doesn't raise on a non-2xx response on its own, and this
+function never called `.raise_for_status()` or checked `resp.status_code`, so
+every single TBW push silently no-op'd with nothing in the logs to point at
+it. Confirmed live: TBW-105766 through TBW-105769 (at least) never created a
+row in custom-order-portal at all — not "stale," genuinely never pushed.
+
+Fixed two ways: (1) corrected the Railway variable to the bare domain, no
+path, and (2) added `resp.raise_for_status()` after the push so a future
+misconfiguration (wrong URL, rotated/wrong token, etc.) shows up as a real,
+logged exception instead of a silent gap. The four missing orders were
+manually backfilled into custom-order-portal via its ingest endpoint,
+reconstructing customer_name/line_items/notes/print_file_url from each
+order's real ShipStation `internalNotes`/items (customer_name via the same
+`_shop_from_text()` filename-parsing logic this app already uses).
+
+If a "some pusher's rows just aren't showing up in custom-order-portal, no
+errors" symptom recurs anywhere in the workspace (not just this project),
+check the exact `PRODUCTION_PORTAL_URL` value for a baked-in path first —
+per this app's own CLAUDE.md, it must be the bare domain, no trailing
+path/slash, since every pusher appends its own path.

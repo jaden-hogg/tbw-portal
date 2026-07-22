@@ -98,7 +98,7 @@ Silently skips (no exception, no blocked order) if `PRODUCTION_PORTAL_URL`/`PROD
 | `FLASK_SECRET_KEY` | session signing (`python3 -c "import secrets; print(secrets.token_hex(32))"`) — Railway only |
 | `SHIPSTATION_V1_API_KEY` / `SHIPSTATION_V1_API_SECRET` | ShipStation — also in Keychain (shared workspace credential) |
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | file storage — the `hogg-outfitters` account, also in Keychain under these exact names (shared with `image-pipeline`), so scripts run locally can read/write this app's Cloudinary-hosted `invoice_state` JSON directly without Railway CLI access |
-| `PRODUCTION_PORTAL_URL` / `PRODUCTION_INGEST_TOKEN` | custom-order-portal's production dashboard push (optional — silently skipped if unset) |
+| `PRODUCTION_PORTAL_URL` / `PRODUCTION_INGEST_TOKEN` | custom-order-portal's production dashboard push (optional — silently skipped if unset). `PRODUCTION_PORTAL_URL` must be the **bare Railway domain, no path** — the push code appends `/admin/production-orders` itself (see NOTES.md's 2026-07-22 incident for what happens if it isn't) |
 | `ANTHROPIC_API_KEY` | box-label vision matching |
 | `MATCH_MODEL` | vision model (set to `claude-haiku-4-5` — cheap, accurate for bold phrases) |
 | `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | Gmail OAuth2 for order notifications |
