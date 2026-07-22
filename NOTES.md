@@ -52,3 +52,28 @@ errors" symptom recurs anywhere in the workspace (not just this project),
 check the exact `PRODUCTION_PORTAL_URL` value for a baked-in path first —
 per this app's own CLAUDE.md, it must be the bare domain, no trailing
 path/slash, since every pusher appends its own path.
+
+## Production dashboard push had the wrong file mapping, 2026-07-22
+Found while backfilling the four orders above and comparing against what
+actually landed: `push_to_production_dashboard()` sent the **Box Label**
+Cloudinary URL as `print_file_url` (matched via `"box label" in name.lower()`),
+never sent `mockup_url` at all, and hardcoded every line item's `sku` to
+`None`. None of that is what the dashboard's Products table needs — a
+"print file" there means the actual print-ready design (**Mug Art
+Transfers**), a "mockup" means the customer-facing preview (**Thumbnails**),
+and the SKU column just displays whatever string is there as plain text (no
+catalog entry required, confirmed by reading `_resolve_item_print_method()`
+in custom-order-portal, which hardcodes Sublimation for `source == 'tbw'`
+regardless of `sku` — populating the real SKU can't break print-method
+resolution). Fixed by matching `"art transfer"` → `print_file_url`,
+`"thumbnail"` → `mockup_url`, and sending the real `sku` (`TBW-11oz`/
+`TBW-15oz`, already known from `build_order_items()`) instead of `None`.
+Scoped entirely inside `push_to_production_dashboard()` — doesn't touch
+`build_notes()`/the ShipStation `internalNotes` blob or any filename shown
+elsewhere in this app; Box Labels still aren't sent anywhere (no field for
+them on non-`amazon_fba` sources).
+
+The four already-backfilled orders (105766–105769) were re-pushed with the
+corrected mapping — if any earlier historical order still shows the mockup
+column as a broken image icon or "—" for SKU, it predates this fix and
+would need the same manual re-push, not a code change.
