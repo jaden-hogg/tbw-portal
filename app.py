@@ -464,17 +464,29 @@ def push_to_production_dashboard(order_number: str, parsed: dict, file_urls: lis
     if not (PRODUCTION_PORTAL_URL and PRODUCTION_INGEST_TOKEN):
         return
     try:
-        box_label_url = next(
-            (u for n, u in file_urls if "box label" in n.lower() and n.lower().endswith(".pdf")),
+        # Real bug found 2026-07-22: this used to match "box label" for print_file_url —
+        # that's the shipping/box label, not a production print file at all. The actual
+        # print-ready design is the "Mug Art Transfers" file; "Thumbnails" is the mockup
+        # preview. Box Labels aren't sent to the dashboard at all (no field for them there;
+        # amazon_fba is the only source with dedicated Box Labels support).
+        print_file_url = next(
+            (u for n, u in file_urls if "art transfer" in n.lower() and n.lower().endswith(".pdf")),
+            None,
+        )
+        mockup_url = next(
+            (u for n, u in file_urls if "thumbnail" in n.lower() and n.lower().endswith(".pdf")),
             None,
         )
         items = build_order_items(parsed)
         product_summary = ", ".join(f"{i['name']} x{i['quantity']}" for i in items)
-        # No real product_skus catalog SKU exists for TBW-11oz/TBW-15oz (or the box-only
-        # replacement items) — sku/variant stay None; the dashboard hardcodes TBW's print
-        # method to Sublimation rather than trying to resolve it from a SKU that isn't there.
+        # Real bug found 2026-07-22: sku was hardcoded None here — "no real product_skus
+        # catalog SKU" is true (nothing to look up print method from), but that doesn't mean
+        # the dashboard's Products table shouldn't just *display* the real ShipStation SKU
+        # (TBW-11oz/TBW-15oz) as plain text like every other source's SKU column does.
+        # _resolve_item_print_method() already hardcodes Sublimation for source='tbw'
+        # regardless of sku, so this can't affect print-method resolution either way.
         line_items = [
-            {"sku": None, "name": i["name"], "variant": None, "quantity": i["quantity"]}
+            {"sku": i.get("sku"), "name": i["name"], "variant": None, "quantity": i["quantity"]}
             for i in items
         ]
         notes = f"PO {parsed['po_number']}"
@@ -491,7 +503,8 @@ def push_to_production_dashboard(order_number: str, parsed: dict, file_urls: lis
                 "product_summary": product_summary,
                 "line_items": line_items,
                 "notes": notes,
-                "print_file_url": box_label_url,
+                "print_file_url": print_file_url,
+                "mockup_url": mockup_url,
                 "external_status": "awaiting_shipment",
             },
             timeout=15,
