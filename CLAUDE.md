@@ -1,9 +1,11 @@
 # TBW Order Portal
 
+> See `NOTES.md` for why / incident root-causes / reverted approaches.
+
 Web portal for **The Buffalo Works** (wholesale customer, Tyler) to submit purchase
 orders. Replaces the old email-parsing workflow. Flask app deployed on Railway.
 
-- **Repo**: GitHub `jaden-hogg/tbw-portal` (private)
+- **Repo**: GitHub `jaden-hogg/tbw-portal` (private) — **first project deployed off the Mac**
 - **Host**: Railway (auto-deploys on push to `main`)
 - **URL**: `https://web-production-a69fb.up.railway.app` (rename in Railway → Settings → Networking)
 - **Stack**: Flask + gunicorn (gthread), PyMuPDF, Cloudinary, ShipStation v1 API, Anthropic vision

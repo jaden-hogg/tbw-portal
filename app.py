@@ -1142,7 +1142,7 @@ def invoices_save():
     status = request.form.get("status", "ready").strip()
     if week_iso:
         state = dict(load_invoice_state())
-        state[week_iso] = {"status": status}
+        state[week_iso] = {**state.get(week_iso, {}), "status": status}
         save_invoice_state(state)
     return redirect(url_for("invoices"))
 
