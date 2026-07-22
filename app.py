@@ -480,7 +480,7 @@ def push_to_production_dashboard(order_number: str, parsed: dict, file_urls: lis
         notes = f"PO {parsed['po_number']}"
         if parsed.get("customer_notes"):
             notes += f"\n\n{parsed['customer_notes']}"
-        requests.post(
+        resp = requests.post(
             f"{PRODUCTION_PORTAL_URL}/admin/production-orders",
             headers={"X-Production-Token": PRODUCTION_INGEST_TOKEN},
             json={
@@ -496,6 +496,14 @@ def push_to_production_dashboard(order_number: str, parsed: dict, file_urls: lis
             },
             timeout=15,
         )
+        # Real incident, 2026-07-22: PRODUCTION_PORTAL_URL was misconfigured in Railway with
+        # an extra "/admin/production" path segment already baked in, so every push actually
+        # 404'd against a nonexistent double-prefixed route — requests.post() doesn't raise
+        # on a non-2xx response on its own, so this silently no-op'd for every TBW order
+        # (confirmed live: TBW-105766 through TBW-105769 never created a row in the portal at
+        # all) with nothing in these logs to point at it. raise_for_status() turns that class
+        # of failure into a real, logged exception below instead of a silent gap.
+        resp.raise_for_status()
     except Exception as e:
         print(f"[production-push] failed for {order_number}: {e}", flush=True)
 
