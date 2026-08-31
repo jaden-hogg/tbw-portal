@@ -77,3 +77,26 @@ The four already-backfilled orders (105766–105769) were re-pushed with the
 corrected mapping — if any earlier historical order still shows the mockup
 column as a broken image icon or "—" for SKU, it predates this fix and
 would need the same manual re-push, not a code change.
+
+## One-off invoice qty correction: TBW-105896 (2026-08-31)
+Tyler submitted TBW-105896 as 8 x 11oz when it should have been 16, caught
+after the order had already shipped (ship date 8/31, so it buckets to the
+week ending Fri 9/4). ShipStation was deliberately left untouched — the
+label was already bought and nothing about fulfillment changes — so only the
+billing side needed fixing.
+
+There is no manual-edit path for this in the portal: invoice line items are
+recomputed from ShipStation line-item quantities on every page load, and
+`invoice_state` only ever holds frozen rows for *finalized* weeks. Week 9/4
+wasn't finalized yet (and freezing it early would have locked out every
+order still to ship that week), so a hand-written state row wasn't an option
+either. Fixed instead with a hardcoded `_QTY_CORRECTIONS` dict applied in
+both `invoice_rows_for_week` (line items / PDF) and `build_all_invoices`
+(week total) — same style as `_MANUALLY_PRICED_ORDERS` and `_COMBINED_INTO`.
+
+Deliberately *not* a general feature: this was a one-off customer mistake,
+not a recurring need, and building a qty-override UI would put a way to
+silently diverge from ShipStation in Tyler's hands. If it recurs, add
+another entry to the dict. The entry can be deleted once that invoice is
+finalized (the frozen row keeps the corrected total on its own), though
+leaving it costs nothing.

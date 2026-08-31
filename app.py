@@ -843,6 +843,12 @@ PATRIOTIC_WEEK = date(2026, 6, 26)  # America's 250th — red/white/blue theme, 
 # straight into ShipStation rather than through the portal form.
 _MANUALLY_PRICED_ORDERS = {"TBW-BLANKS"}  # 2026-07-10: blank mugs $1.75 + blank boxes $0.50
 
+# One-off invoice corrections: PO number -> corrected mug qty by size. TBW
+# submitted TBW-105896 as 8 x 11oz when it should have been 16; the order had
+# already shipped, so ShipStation is left alone and only the billing side is
+# corrected. Applied in both invoice_rows_for_week and build_all_invoices.
+_QTY_CORRECTIONS = {"105896": {"11oz": 16}}  # 2026-08-31
+
 STATUS_LABELS = {
     "ready":     "Ready – Not Paid",
     "submitted": "Payment Submitted",
@@ -982,6 +988,14 @@ def _claimed_pos(state: dict) -> set[str]:
     return claimed
 
 
+def _apply_qty_correction(po: str, q11: int, q15: int) -> tuple[int, int]:
+    """Override the ShipStation quantities for a PO in _QTY_CORRECTIONS."""
+    corr = _QTY_CORRECTIONS.get(po)
+    if not corr:
+        return q11, q15
+    return corr.get("11oz", q11), corr.get("15oz", q15)
+
+
 def invoice_rows_for_week(
     week_end: date, orders: list[dict], shipments: dict, claimed: set[str] = frozenset(),
 ) -> list[dict]:
@@ -1019,13 +1033,15 @@ def invoice_rows_for_week(
                 q11 += qty
             elif "15oz" in sku:
                 q15 += qty
+        po = o["orderNumber"].replace("TBW-", "")
+        q11, q15 = _apply_qty_correction(po, q11, q15)
         price_mult = 0.5 if is_replacement_order(o) else 1.0
 
         subtotal = (q11 * PRICE_11OZ + q15 * PRICE_15OZ) * price_mult
         price = (PRICE_11OZ if (q11 and not q15 and not box_qty) else
                  PRICE_15OZ if (q15 and not q11 and not box_qty) else 0.0) * price_mult
         rows.append({
-            "po": o["orderNumber"].replace("TBW-", ""),
+            "po": po,
             "qty": q11 + q15 + box_qty, "price": price,
             "subtotal": round(subtotal, 2), "shipping": shipping,
             "total": round(subtotal + shipping, 2),
@@ -1076,6 +1092,7 @@ def build_all_invoices() -> list[dict]:
                 q11 += it.get("quantity", 0)
             elif "15oz" in sku:
                 q15 += it.get("quantity", 0)
+        q11, q15 = _apply_qty_correction(o["orderNumber"].replace("TBW-", ""), q11, q15)
         price_mult = 0.5 if is_replacement_order(o) else 1.0
         total = (q11 * PRICE_11OZ + q15 * PRICE_15OZ) * price_mult + shipping
         totals[friday] = totals.get(friday, 0.0) + total
