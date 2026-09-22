@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import json
@@ -11,7 +10,6 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
-from email.mime.text import MIMEText
 from functools import wraps
 from zoneinfo import ZoneInfo
 
@@ -22,6 +20,8 @@ ET = ZoneInfo("America/New_York")
 
 import fitz
 import requests
+
+import hogg_notify as notify
 from box_labels import expand_box_labels, parse_po_line_items
 from invoice import generate_invoice_pdf
 from flask import (
@@ -42,10 +42,9 @@ CLD_CLOUD         = os.environ["CLOUDINARY_CLOUD_NAME"]
 CLD_API_KEY       = os.environ["CLOUDINARY_API_KEY"]
 CLD_API_SECRET    = os.environ["CLOUDINARY_API_SECRET"]
 CLD_UPLOAD_URL    = f"https://api.cloudinary.com/v1_1/{CLD_CLOUD}/auto/upload"
-NOTIFY_EMAIL      = "mugs@hoggoutfitters.com"
-GMAIL_CLIENT_ID     = os.environ.get("GMAIL_CLIENT_ID", "")
-GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET", "")
-GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN", "")
+# The order email's recipient (mugs@) and sender live in hogg_notify/registry.py as
+# `tbw.order_received`; the Gmail credentials it reads are GMAIL_CLIENT_ID/SECRET and
+# NOTIFY_GMAIL_REFRESH_TOKEN, set in Railway Variables.
 # custom-order-portal's production dashboard (2026-07-16) — pushed to on order creation so
 # the dashboard has this order's data without re-deriving it later from ShipStation's own
 # free-text internalNotes. Optional/silently-skipped if unset, same as the Gmail vars above.
@@ -411,19 +410,14 @@ def build_package(qty_11oz: int, qty_15oz: int) -> dict:
 
 
 def send_order_notification(order_number: str, parsed: dict, warnings: list[str]) -> None:
-    """Email mugs@ when a TBW order lands in ShipStation. Silently skips if Gmail creds absent."""
-    if not (GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET and GMAIL_REFRESH_TOKEN):
-        return
-    try:
-        token_resp = requests.post("https://oauth2.googleapis.com/token", data={
-            "grant_type":    "refresh_token",
-            "refresh_token": GMAIL_REFRESH_TOKEN,
-            "client_id":     GMAIL_CLIENT_ID,
-            "client_secret": GMAIL_CLIENT_SECRET,
-        }, timeout=15)
-        token_resp.raise_for_status()
-        access_token = token_resp.json()["access_token"]
+    """Email the production team when a TBW order lands in ShipStation.
 
+    Sent through hogg_notify (event `tbw.order_received`, from custom@customhoggtumblers.com —
+    TBW orders are custom mug production); recipients live in its registry. A failure is
+    caught and logged rather than raised: the order is already in ShipStation by this point,
+    and losing the email must not fail the submission the customer is waiting on.
+    """
+    try:
         ship_parts = [
             parsed.get("ship_name") or "The Buffalo Works",
             parsed.get("ship_street1") or "",
@@ -439,17 +433,8 @@ def send_order_notification(order_number: str, parsed: dict, warnings: list[str]
         if warnings:
             lines += ["", "Warnings:", *[f"- {w}" for w in warnings]]
 
-        msg = MIMEText("\n".join(lines))
-        msg["to"]      = NOTIFY_EMAIL
-        msg["from"]    = "jaden@hoggoutfitters.com"
-        msg["subject"] = f"New TBW Order: {order_number}"
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        requests.post(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-            headers={"Authorization": f"Bearer {access_token}"},
-            json={"raw": raw},
-            timeout=15,
-        )
+        notify.send("tbw.order_received", subject=f"New TBW Order: {order_number}",
+                    text="\n".join(lines))
     except Exception as e:
         print(f"[notify] email failed for {order_number}: {e}", flush=True)
 

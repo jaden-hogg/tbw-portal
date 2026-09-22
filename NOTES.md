@@ -100,3 +100,15 @@ silently diverge from ShipStation in Tyler's hands. If it recurs, add
 another entry to the dict. The entry can be deleted once that invoice is
 finalized (the frozen row keeps the corrected total on its own), though
 leaving it costs nothing.
+
+## Order email moved to hogg_notify (2026-09-22)
+
+`send_order_notification()` no longer holds its own Gmail plumbing or the mugs@ address; both
+come from the shared helper (`tbw.order_received`, from custom@customhoggtumblers.com, since a
+TBW order is custom mug production). Needs `NOTIFY_GMAIL_REFRESH_TOKEN` in Railway instead of
+`GMAIL_REFRESH_TOKEN`.
+
+The "silently skips if Gmail creds are absent" behaviour is gone on purpose: the helper raises
+a named error instead, and the call site catches and logs it. The order is already in
+ShipStation by then, so the email must not fail the submission — but a missing credential
+should say so in the log rather than look like a working send.

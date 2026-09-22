@@ -82,7 +82,7 @@ box-label warnings. The box-label link points to the expanded PDF. Same field ex
 the Replacement Order flow (shared form fields below the qty inputs).
 
 ## Order notification email
-When a ShipStation order is successfully created, an email is sent to `mugs@hoggoutfitters.com` (subject: `New TBW Order: TBW-XXXXX`) with the PO number, quantities, and ship-to address. Uses Gmail OAuth2 via the same raw-token pattern as the rest of the workspace. If Gmail credentials are missing, the notification silently skips (does not block order creation).
+When a ShipStation order is successfully created, an email is sent to `mugs@hoggoutfitters.com` (subject: `New TBW Order: TBW-XXXXX`) with the PO number, quantities, and ship-to address. Sent through `hogg_notify` (event `tbw.order_received`, from `custom@customhoggtumblers.com` — TBW orders are custom mug production; see `hogg-notify/CLAUDE.md`), so the recipient lives in its registry rather than here. A send failure is caught and logged, never blocking order creation.
 
 ## Push to the Production Dashboard (2026-07-16)
 Right after the ShipStation order lands (`submit_order()`, same success path as the notification email above), also POSTs the order into `custom-order-portal`'s production dashboard (`push_to_production_dashboard()`) — `source: "tbw"`, `source_ref` = the ShipStation `orderNumber`, customer name (via the same `_shop_from_text()` helper the dashboard's own "Ship To" column already uses), product summary + a structured `line_items` list from `build_order_items()` (real `sku`: `TBW-11oz`/`TBW-15oz` — displayed as plain text on the dashboard's Products table, no catalog entry needed for that), and PO number (+ the New Order form's free-text Customer Notes, when filled in) as `notes`. `print_file_url` is the **Mug Art Transfers** Cloudinary URL (matched by `"art transfer" in name.lower()` + `.pdf`) — the actual print-ready design — and `mockup_url` is the **Thumbnails** file (`"thumbnail" in name.lower()`); Box Labels aren't sent to the dashboard at all (no field there for them; `amazon_fba` is the only source with dedicated Box Labels support). This is why the push happens from here rather than the dashboard re-parsing `internalNotes` later: this app already has the clean structured data in hand at this exact point.
@@ -99,7 +99,7 @@ Silently skips (no exception, no blocked order) if `PRODUCTION_PORTAL_URL`/`PROD
 | `PRODUCTION_PORTAL_URL` / `PRODUCTION_INGEST_TOKEN` | custom-order-portal's production dashboard push (optional — silently skipped if unset). `PRODUCTION_PORTAL_URL` must be the **bare Railway domain, no path** — the push code appends `/admin/production-orders` itself (see NOTES.md's 2026-07-22 incident for what happens if it isn't) |
 | `ANTHROPIC_API_KEY` | box-label vision matching |
 | `MATCH_MODEL` | vision model (set to `claude-haiku-4-5` — cheap, accurate for bold phrases) |
-| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` | Gmail OAuth2 for order notifications |
+| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `NOTIFY_GMAIL_REFRESH_TOKEN` | Gmail OAuth2 for order notifications, read by `hogg_notify` |
 
 Cloudinary folder per order: `TBW-Orders/PO-<number>/`.
 
