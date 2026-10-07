@@ -52,10 +52,50 @@ EVENTS = {
         sender="custom", audience="staff", to=[JADEN, JEREMY],
         project="custom-order-portal",
         when="Staff raise a Faire pre-order quote; staff paste the link into Faire chat"),
+    # The approval chase on a real Faire order (see FAIRE_CUSTOM.md). Same audience as the
+    # proof-ready email, since it is the same person pasting the same conversation onward.
+    "faire.approval_reminder": dict(
+        sender="custom", audience="staff", to=[SUPPORT, JADEN],
+        project="custom-order-portal",
+        when="24h after a Faire proof went up with no approval — short nudge to paste"),
+    "faire.approval_final": dict(
+        sender="custom", audience="staff", to=[SUPPORT, JADEN],
+        project="custom-order-portal",
+        when="48h after that nudge: the proof auto-approves and goes to production"),
+
+    # Before any proof exists: the retailer hasn't sent artwork yet, so there is nothing to
+    # draw and the job cannot start. Same audience as that order's other emails.
+    "faire.artwork_reminder": dict(
+        sender="custom", audience="staff", to=[SUPPORT, JADEN],
+        project="custom-order-portal",
+        when="Every 24h while a paid Faire order still has no artwork"),
+    "faire.artwork_final": dict(
+        sender="custom", audience="staff", to=[SUPPORT, JADEN],
+        project="custom-order-portal",
+        when="7 days with no artwork: the quote is closed and the Faire order needs cancelling"),
+    "faire.preorder_artwork_reminder": dict(
+        sender="custom", audience="staff", to=[JADEN, JEREMY],
+        project="custom-order-portal",
+        when="Every 24h while a Faire pre-order still has no artwork"),
+    "faire.preorder_artwork_final": dict(
+        sender="custom", audience="staff", to=[JADEN, JEREMY],
+        project="custom-order-portal",
+        when="7 days with no artwork on a pre-order: the request is closed"),
+
     "faire.preorder_proof_ready": dict(
         sender="custom", audience="staff", to=[JADEN, JEREMY],
         project="custom-order-portal",
         when="Proof pushed on a Faire pre-order; staff paste the message into Faire chat"),
+
+    # A pre-order's chase: they have a mockup but have not bought yet.
+    "faire.preorder_reminder": dict(
+        sender="custom", audience="staff", to=[JADEN, JEREMY],
+        project="custom-order-portal",
+        when="2, 6 and 12 days after a pre-order's proof went up with no order placed"),
+    "faire.preorder_closed": dict(
+        sender="custom", audience="staff", to=[JADEN, JEREMY],
+        project="custom-order-portal",
+        when="14 days after a pre-order's proof went up with no order — the quote is closed"),
 
     # --- custom-order-portal: customers ---------------------------------------------
     "portal.customer.submission_received": dict(
@@ -109,18 +149,19 @@ EVENTS = {
         sender="custom", audience="staff", to=[JADEN, JEREMY],
         project="faire-fulfillment-sync",
         when="The real Faire order arrives for a pre-order (reply on the pre-order's thread)"),
-    "faire.custom_shop_order": dict(
+    # Every custom order that gets held, whichever store sold it — Faire, the Custom Shop or
+    # TSD. These are the people who make the decorated goods, so they are told about anything
+    # that needs decorating regardless of where it came from.
+    "custom.order_held": dict(
         sender="custom", audience="staff", to=[JADEN, DARYL, HIEP, JASONK, JEREMY],
-        project="faire-fulfillment-sync", when="A non-Faire order carries a customization"),
+        project="faire-fulfillment-sync",
+        when="A custom order is held in ShipStation so it can't ship undecorated"),
     "faire.watched_collection": dict(
         sender="custom", audience="staff", to=[JADEN, DARYL, HIEP, JASONK],
         project="faire-fulfillment-sync", when="A Faire order includes a watched-collection SKU"),
-    "faire.released_hold": dict(
-        sender="custom", audience="staff", to=[JADEN, DARYL, HIEP, JASONK, JEREMY],
-        project="faire-fulfillment-sync", when="A held custom order was released or changed"),
     "faire.international": dict(
         sender="ops", audience="staff",
-        to=[SUPPORT, JASONK, VIP, "carlos@hoggoutfitters.com"],
+        to=[SUPPORT, JASONK, VIP],
         project="faire-fulfillment-sync", when="An international Faire order is detected"),
 
     # --- wholesale-portal -------------------------------------------------------------
@@ -142,6 +183,9 @@ EVENTS = {
     "wholesale.failure": dict(
         sender="sales", audience="staff", to=[JADEN, JEREMY], project="wholesale-portal",
         when="Building a wholesale account failed"),
+    "wholesale.price_sync_attention": dict(
+        sender="ops", audience="staff", to=[JADEN], project="wholesale-portal",
+        when="The B2B price sync failed or stopped and needs a person (never routine runs)"),
     "wholesale.tax_exempt_handoff": dict(
         sender="sales", audience="staff", to=["tax.exempt@hoggoutfitters.com"],
         project="wholesale-portal", when="Resale certificate handed to tax.exempt@ for review"),
@@ -161,6 +205,15 @@ EVENTS = {
     "amazon.fba_workflow": dict(
         sender="ops", audience="staff", to=[JADEN],
         project="Amazon-Inventory", when="Amazon FBA inbound workflow, FedEx step"),
+    "amazon.daily_report": dict(
+        sender="ops", audience="staff", to=[JADEN, JEREMY],
+        project="amazon-daily-report", when="Daily Amazon revenue trends email for yesterday"),
+    "amazon.daily_products": dict(
+        sender="ops", audience="staff", to=[JADEN, JEREMY],
+        project="amazon-daily-report", when="Daily Amazon products-sold email for yesterday"),
+    "amazon.intraday_products": dict(
+        sender="ops", audience="staff", to=[JADEN, JEREMY],
+        project="amazon-daily-report", when="Amazon products sold today so far, every 3 hours 9am–9pm CT"),
     "shipstation.credit_alert": dict(
         sender="ops", audience="staff", to=[JADEN, JEREMY],
         project="shipstation-tools", when="A net-terms customer placed an order (credit tracker)"),
