@@ -139,14 +139,13 @@ EVENTS = {
     "portal.customer.tsd_auto_approved": dict(
         sender="custom", audience="customer", to=None, project="custom-order-portal",
         when="TSD proof auto-approved at 7 days"),
-    # Sent as jaden@, not custom@: Jaden asked for the order chat to come from him. (The
-    # portal's other customer mail is still custom@ through Resend, not through here.)
+    # Like the rest of the portal's customer mail, these two go out through Resend (custom@),
+    # not this helper; listed so the map shows them. Never from jaden@ (Jaden, 2026-10-08).
     "portal.customer.chat_message": dict(
-        sender="ops", audience="customer", to=None, project="custom-order-portal",
-        when="Staff sent a message in the chat on the customer's order page"),
-    # Also jaden@, with Hiep CC'd by the caller: the better-file request and its follow-ups.
+        sender="custom", audience="customer", to=None, project="custom-order-portal",
+        when="Staff sent a message in the chat on the customer's order page (a notice; the reply happens on the page)"),
     "portal.customer.artwork_request": dict(
-        sender="ops", audience="customer", to=None, project="custom-order-portal",
+        sender="custom", audience="customer", to=None, project="custom-order-portal",
         when="An ordered job needs a better artwork file: the request, 2 follow-ups and a final warning"),
 
     # --- custom-order-portal: ops -----------------------------------------------------

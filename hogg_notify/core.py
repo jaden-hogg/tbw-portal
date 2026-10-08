@@ -20,11 +20,10 @@ import os
 import re
 import time
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import formataddr, parseaddr
+from email.utils import formataddr
 from typing import List, Optional, Sequence, Tuple
 
 import requests
@@ -241,34 +240,6 @@ def send(event: str,
           f"| {subject} | {message_id or sent['id']}", flush=True)
     return ThreadRef(message_id=message_id, thread_id=sent.get("threadId", ""),
                      subject=subject, gmail_id=sent["id"])
-
-
-# Our own addresses. A message in a thread from anywhere else is the other side replying.
-OUR_DOMAINS = ("hoggoutfitters.com", "customhoggtumblers.com")
-
-
-def last_outside_reply(thread_id: str) -> Optional[datetime]:
-    """When someone outside Hogg last wrote in this sending-mailbox thread (a ThreadRef's
-    `thread_id`), or None if nobody has. Headers only — the token can't read bodies, and
-    doesn't need to: "did the customer answer" is a question about who sent what, and when.
-    Raises NotifyError if Gmail can't be asked; the caller decides what that means."""
-    if not thread_id:
-        return None
-    resp = requests.get(f"{GMAIL}/threads/{thread_id}", timeout=20,
-                        params={"format": "metadata", "metadataHeaders": "From"},
-                        headers={"Authorization": f"Bearer {_access_token()}"})
-    if resp.status_code != 200:
-        raise NotifyError(f"Gmail thread lookup failed (HTTP {resp.status_code}): {resp.text[:200]}")
-    latest = None
-    for m in resp.json().get("messages", []):
-        sender = next((h.get("value", "") for h in m.get("payload", {}).get("headers", [])
-                       if h.get("name", "").lower() == "from"), "")
-        addr = parseaddr(sender)[1].lower()
-        if not addr or addr.split("@")[-1] in OUR_DOMAINS:
-            continue
-        when = datetime.fromtimestamp(int(m.get("internalDate", 0)) / 1000, tz=timezone.utc)
-        latest = max(latest, when) if latest else when
-    return latest
 
 
 def _read_message_id(token, gmail_id, event):
