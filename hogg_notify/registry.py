@@ -42,6 +42,10 @@ EVENTS = {
         sender="custom", audience="staff", to=[HIEP, JADEN],
         project="custom-order-portal",
         when="A customer's first artwork upload on a quote that had none"),
+    "portal.chat_message": dict(
+        sender="custom", audience="staff", to=[HIEP, JADEN],
+        project="custom-order-portal",
+        when="A customer sends a message in the chat on their order page"),
 
     # --- custom-order-portal: Faire custom (see FAIRE_CUSTOM.md) --------------------
     "faire.proof_ready": dict(
@@ -131,6 +135,11 @@ EVENTS = {
     "portal.customer.tsd_auto_approved": dict(
         sender="custom", audience="customer", to=None, project="custom-order-portal",
         when="TSD proof auto-approved at 7 days"),
+    # Sent as jaden@, not custom@: Jaden asked for the order chat to come from him. (The
+    # portal's other customer mail is still custom@ through Resend, not through here.)
+    "portal.customer.chat_message": dict(
+        sender="ops", audience="customer", to=None, project="custom-order-portal",
+        when="Staff sent a message in the chat on the customer's order page"),
 
     # --- custom-order-portal: ops -----------------------------------------------------
     "portal.fba_batch": dict(
