@@ -195,6 +195,17 @@ EVENTS = {
         sender="custom", audience="staff", to=["mugs@hoggoutfitters.com"],
         project="tbw-portal", when="A Buffalo Works PO lands in ShipStation"),
 
+    # --- tribe-portal -------------------------------------------------------------------
+    "tribe.order_received": dict(
+        sender="custom", audience="staff", to=["mugs@hoggoutfitters.com"],
+        project="tribe-portal", when="A Tribe order lands in ShipStation"),
+    "tribe.customer.monthly_invoice": dict(
+        sender="sales", audience="customer", to=None, project="tribe-portal",
+        when="1st of the month: last month's Tribe invoice, spreadsheet + card payment link"),
+    "tribe.invoice_failed": dict(
+        sender="ops", audience="staff", to=[JADEN], project="tribe-portal",
+        when="The monthly Tribe invoice could not be built or sent (retries hourly)"),
+
     # --- ops scripts on the Mac -----------------------------------------------------------
     "mfn.alert": dict(
         sender="ops", audience="staff", to=[JADEN, "ryan@hoggoutfitters.com"],
