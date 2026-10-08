@@ -46,6 +46,10 @@ EVENTS = {
         sender="custom", audience="staff", to=[HIEP, JADEN],
         project="custom-order-portal",
         when="A customer sends a message in the chat on their order page"),
+    "portal.artwork_released": dict(
+        sender="custom", audience="staff", to=[HIEP, JADEN],
+        project="custom-order-portal",
+        when="A better-file request ran out (24h after the final warning): printing with the file we have"),
 
     # --- custom-order-portal: Faire custom (see FAIRE_CUSTOM.md) --------------------
     "faire.proof_ready": dict(
@@ -140,6 +144,10 @@ EVENTS = {
     "portal.customer.chat_message": dict(
         sender="ops", audience="customer", to=None, project="custom-order-portal",
         when="Staff sent a message in the chat on the customer's order page"),
+    # Also jaden@, with Hiep CC'd by the caller: the better-file request and its follow-ups.
+    "portal.customer.artwork_request": dict(
+        sender="ops", audience="customer", to=None, project="custom-order-portal",
+        when="An ordered job needs a better artwork file: the request, 2 follow-ups and a final warning"),
 
     # --- custom-order-portal: ops -----------------------------------------------------
     "portal.fba_batch": dict(
@@ -150,6 +158,10 @@ EVENTS = {
         project="custom-order-portal", when="FBA batch shipment email for the NJ warehouse"),
 
     # --- faire-fulfillment-sync -------------------------------------------------------
+    "faire.artwork_request": dict(
+        sender="custom", audience="staff", to=[SUPPORT, JADEN],
+        project="custom-order-portal",
+        when="A Faire order needs a better artwork file: a message to paste into Faire chat (request, follow-ups, final warning)"),
     "faire.mockup_request": dict(
         sender="custom", audience="staff", to=[SUPPORT, JADEN],
         project="faire-fulfillment-sync",
