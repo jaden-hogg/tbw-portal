@@ -23,6 +23,7 @@ JEREMY = "jeremy@hoggoutfitters.com"
 HIEP = "hiep@hoggoutfitters.com"
 DARYL = "daryl@hoggoutfitters.com"
 JASONK = "jasonk@hoggoutfitters.com"
+JIM = "jim@hoggoutfitters.com"
 SUPPORT = "support@hoggoutfitters.com"
 VIP = "vip@hoggoutfitters.com"
 
@@ -248,4 +249,8 @@ EVENTS = {
     "shipstation.credit_alert": dict(
         sender="ops", audience="staff", to=[JADEN, JEREMY],
         project="shipstation-tools", when="A net-terms customer placed an order (credit tracker)"),
+    "shipstation.rebox_report": dict(
+        sender="ops", audience="staff", to=[JEREMY, JIM, JASONK],
+        project="shipstation-tools",
+        when="Weekly (Fri 7am CT): labels voided and reprinted in the past week, what box changed, and the SKUs behind added boxes"),
 }
