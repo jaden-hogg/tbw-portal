@@ -215,6 +215,11 @@ EVENTS = {
     "tbw.order_received": dict(
         sender="custom", audience="staff", to=["mugs@hoggoutfitters.com"],
         project="tbw-portal", when="A Buffalo Works PO lands in ShipStation"),
+    "tbw.order_attention": dict(
+        sender="custom", audience="staff", to=["mugs@hoggoutfitters.com"],
+        project="tbw-portal",
+        when="TBW dashboard sync: an order was cancelled, edited after we received it, or "
+             "couldn't be synced"),
 
     # --- tribe-portal -------------------------------------------------------------------
     "tribe.order_received": dict(

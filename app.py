@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import re
+import sys
 import threading
 import time
 import uuid
@@ -15,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 ET = ZoneInfo("America/New_York")
 
@@ -22,6 +24,7 @@ import fitz
 import requests
 
 import hogg_notify as notify
+import tbw_sync
 from box_labels import expand_box_labels, parse_po_line_items
 from invoice import generate_invoice_pdf
 from flask import (
@@ -477,33 +480,41 @@ def push_to_production_dashboard(order_number: str, parsed: dict, file_urls: lis
         notes = f"PO {parsed['po_number']}"
         if parsed.get("customer_notes"):
             notes += f"\n\n{parsed['customer_notes']}"
-        resp = requests.post(
-            f"{PRODUCTION_PORTAL_URL}/admin/production-orders",
-            headers={"X-Production-Token": PRODUCTION_INGEST_TOKEN},
-            json={
-                "source": "tbw",
-                "source_ref": order_number,
-                "customer_name": _shop_from_text("\n".join(n for n, _ in file_urls)) or "The Buffalo Works",
-                "order_date": datetime.now(ET).strftime("%Y-%m-%d"),
-                "product_summary": product_summary,
-                "line_items": line_items,
-                "notes": notes,
-                "print_file_url": print_file_url,
-                "mockup_url": mockup_url,
-                "external_status": "awaiting_shipment",
-            },
-            timeout=15,
-        )
-        # Real incident, 2026-07-22: PRODUCTION_PORTAL_URL was misconfigured in Railway with
-        # an extra "/admin/production" path segment already baked in, so every push actually
-        # 404'd against a nonexistent double-prefixed route — requests.post() doesn't raise
-        # on a non-2xx response on its own, so this silently no-op'd for every TBW order
-        # (confirmed live: TBW-105766 through TBW-105769 never created a row in the portal at
-        # all) with nothing in these logs to point at it. raise_for_status() turns that class
-        # of failure into a real, logged exception below instead of a silent gap.
-        resp.raise_for_status()
+        post_to_production_dashboard({
+            "source": "tbw",
+            "source_ref": order_number,
+            "customer_name": _shop_from_text("\n".join(n for n, _ in file_urls)) or "The Buffalo Works",
+            "order_date": datetime.now(ET).strftime("%Y-%m-%d"),
+            "product_summary": product_summary,
+            "line_items": line_items,
+            "notes": notes,
+            "print_file_url": print_file_url,
+            "mockup_url": mockup_url,
+            "external_status": "awaiting_shipment",
+        })
     except Exception as e:
         print(f"[production-push] failed for {order_number}: {e}", flush=True)
+
+
+def post_to_production_dashboard(payload: dict) -> None:
+    """POST one order to custom-order-portal's production ingest. No-op if unconfigured;
+    raises on a non-2xx (callers catch and log). Shared by the old form and tbw_sync."""
+    if not (PRODUCTION_PORTAL_URL and PRODUCTION_INGEST_TOKEN):
+        return
+    resp = requests.post(
+        f"{PRODUCTION_PORTAL_URL}/admin/production-orders",
+        headers={"X-Production-Token": PRODUCTION_INGEST_TOKEN},
+        json=payload,
+        timeout=15,
+    )
+    # Real incident, 2026-07-22: PRODUCTION_PORTAL_URL was misconfigured in Railway with
+    # an extra "/admin/production" path segment already baked in, so every push actually
+    # 404'd against a nonexistent double-prefixed route — requests.post() doesn't raise
+    # on a non-2xx response on its own, so this silently no-op'd for every TBW order
+    # (confirmed live: TBW-105766 through TBW-105769 never created a row in the portal at
+    # all) with nothing in these logs to point at it. raise_for_status() turns that class
+    # of failure into a real, logged exception below instead of a silent gap.
+    resp.raise_for_status()
 
 
 def submit_order(order_number: str, parsed: dict) -> None:
@@ -947,6 +958,12 @@ def ship_friday(order: dict, shipments: dict) -> date | None:
     return fri
 
 
+def is_tbw_api_order(order: dict) -> bool:
+    """Made by tbw_sync from TBW's dashboard. TBW invoices those itself (we send them the
+    shipping cost), so they're left out of these invoices or they'd be billed twice."""
+    return (order.get("orderKey") or "").startswith(tbw_sync.ORDER_KEY_PREFIX)
+
+
 def is_replacement_order(order: dict) -> bool:
     return (order.get("orderNumber") or "").endswith("-REPLACEMENT")
 
@@ -987,7 +1004,7 @@ def invoice_rows_for_week(
     """Line items (one per PO) for orders that shipped in the Sat-Fri week ending week_end."""
     rows: list[dict] = []
     for o in orders:
-        if o["orderNumber"].replace("TBW-", "") in claimed:
+        if o["orderNumber"].replace("TBW-", "") in claimed or is_tbw_api_order(o):
             continue
         fw = ship_friday(o, shipments)
         if fw is None or invoice_week(fw) != week_end:
@@ -1056,7 +1073,7 @@ def build_all_invoices() -> list[dict]:
     last_friday = most_recent_friday() + timedelta(days=7)
     totals: dict[date, float] = {}
     for o in orders:
-        if o["orderNumber"].replace("TBW-", "") in claimed:
+        if o["orderNumber"].replace("TBW-", "") in claimed or is_tbw_api_order(o):
             continue
         friday = ship_friday(o, shipments)
         if friday is None or friday < FIRST_INVOICE_FRIDAY or friday > last_friday:
@@ -1213,7 +1230,11 @@ def invoices_pdf():
     )
 
 
-# ── Scheduler: finalize each week at Friday noon ET ─────────────────────────────
+# ── Scheduler: finalize each week at Friday noon ET; TBW dashboard sync ────────
+
+def _run_tbw_sync() -> None:
+    tbw_sync.sync_once(sys.modules[__name__])
+
 
 def _start_scheduler() -> None:
     scheduler = BackgroundScheduler(timezone=ET)
@@ -1224,6 +1245,17 @@ def _start_scheduler() -> None:
         misfire_grace_time=3600,
         replace_existing=True,
     )
+    # TBW dashboard sync (tbw_sync.py) every 15 min, whenever the API token is set.
+    if tbw_sync.TBW_API_TOKEN:
+        scheduler.add_job(
+            _run_tbw_sync,
+            IntervalTrigger(minutes=15, timezone=ET),
+            id="tbw_sync",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now(ET) + timedelta(minutes=1),
+            replace_existing=True,
+        )
     scheduler.start()
 
 

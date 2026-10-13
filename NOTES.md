@@ -112,3 +112,35 @@ The "silently skips if Gmail creds are absent" behaviour is gone on purpose: the
 a named error instead, and the call site catches and logs it. The order is already in
 ShipStation by then, so the email must not fail the submission — but a missing credential
 should say so in the log rather than look like a working send.
+
+## Moved to TBW's dashboard (2026-10-13)
+
+TBW built their own order dashboard (`hoggapp.tbwbrands.com`) because it fits their process
+better, and from October 2026 they started doing tees, towels and totes as well as mugs. For
+non-mug items TBW sends us the blanks, so we keep TBW's SKUs and names and track no inventory
+for them; only mugs convert to our `TBW-11oz`/`TBW-15oz`. They also took over invoicing, using
+the shipping cost we post (label × 1.2), which is why dashboard orders are excluded from our
+Invoices tab rather than the tab being kept as a second bill.
+
+We wrote the API contract (`TBW_API_SPEC.md`) and TBW's Claude built it. Their first offer was
+to "build the ShipStation link" themselves; we kept that on our side so ShipStation keys never
+leave us. The pull model (we poll, they never call us) means nothing on Railway is exposed.
+
+Decisions:
+- **orderKey `tbw-api-<id>` as the identity**, not the state blob: ShipStation is already the
+  durable record, createorder upserts on orderKey, and the invoice/shipment code needs to tell
+  these orders from old-form ones anyway.
+- **One ShipStation line per TBW line** (not the old rolled-up 11oz/15oz line) so each
+  shipment's items map back to TBW line ids. TBW counts a shipment with no `line_items` as
+  everything remaining, so we always send them.
+- **Extra labels fold into the previous shipment** instead of posting a second one: TBW would
+  otherwise mark the order fully shipped on the first box and 409 the rest.
+- **TBW edits after receipt are emailed, not applied** — production may already be underway.
+  Cancels are the exception (Jaden: cancel in ShipStation automatically).
+- **Edits are detected against TBW's own earlier version**, because comparing with the
+  ShipStation order would flag staff edits and ShipStation's address normalising.
+- **Box labels match against mug lines only**: the towel line on 106018 would otherwise be a
+  candidate for a label page.
+
+At switch-over the old form had last been used on 2026-10-05 (TBW-106003), and 7 orders
+(POs 106002–106023, Oct 5–9) existed only in TBW's dashboard.

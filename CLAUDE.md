@@ -2,15 +2,73 @@
 
 > See `NOTES.md` for why / incident root-causes / reverted approaches.
 
-Web portal for **The Buffalo Works** (wholesale customer, Tyler) to submit purchase
-orders. Replaces the old email-parsing workflow. Flask app deployed on Railway.
+Flask app on Railway for **The Buffalo Works** (TBW, wholesale customer, Tyler). TBW now
+submits orders in **their own dashboard** (`hoggapp.tbwbrands.com`, a PHP app TBW built for
+us); this app pulls them into ShipStation with `tbw_sync.py` (below). The old New Order form
+stays up for now (see below). This app also keeps the order list, the box-label expansion, and
+the weekly Invoices tab for orders from before the switch.
 
 - **Repo**: GitHub `jaden-hogg/tbw-portal` (private) — **first project deployed off the Mac**
 - **Host**: Railway (auto-deploys on push to `main`)
 - **URL**: `https://web-production-a69fb.up.railway.app` (rename in Railway → Settings → Networking)
 - **Stack**: Flask + gunicorn (gthread), PyMuPDF, Cloudinary, ShipStation v1 API, Anthropic vision
 
-## Flow
+## TBW dashboard sync (`tbw_sync.py`) — how orders come in now
+API contract: `TBW_API_SPEC.md` (what we asked for); TBW's as-built differences are noted
+below. Base `https://hoggapp.tbwbrands.com/api`, `Authorization: Bearer $TBW_API_TOKEN`.
+
+Runs every 15 min in the app's APScheduler (`_run_tbw_sync`) whenever `TBW_API_TOKEN` is
+set — removing the variable is the off switch. Test without writing anything: `python3 tbw_sync.py --dry-run
+[--labels-to DIR]` (needs `TBW_API_TOKEN` from Keychain in the env).
+
+- **Orders** (`GET /orders?updated_since=`, inclusive, so the last order repeats; skipped via
+  `seen`). For a new order:
+  - ShipStation order `TBW-<PO>` (`-REPLACEMENT` when `is_replacement`; a second replacement
+    for the same PO adds `-<TBW id>`). **`orderKey = tbw-api-<TBW id>`** marks every order this
+    sync made — it's how existing orders are recognised (createorder upserts on orderKey, so a
+    double run can't duplicate) and how invoices/shipments tell them apart from old-form orders.
+  - One ShipStation line per TBW line, `lineItemKey` = TBW line id. `mug_size` set → our
+    `TBW-11oz`/`TBW-15oz` SKU with TBW's description as the name; `box_only` → no-SKU
+    `TBW <size> - BOX ONLY - <desc>`; anything else (tees, towels, totes) keeps TBW's SKU/name.
+  - Weight/box from `build_package` on mug counts only. **Non-mug items have no weights yet**
+    (TBW sends `unit_weight_oz: null`); an order with no mugs gets no weight at all.
+  - `shipByDate` = TBW's `requested_ship_date`. TBW's `notes` go in as CUSTOMER NOTES.
+  - Every file is downloaded from TBW (links need the token) and re-uploaded to Cloudinary
+    `TBW-Orders/PO-<...>/`; duplicate filenames skipped. The `box_label` file is expanded
+    against the **mug lines only** (box labels are mug gift boxes).
+  - Then: ack to TBW (`POST /orders/{id}/ack`), `tbw.order_received` email, Production
+    dashboard push (`post_to_production_dashboard`, customer = TBW `store_name`).
+  - TBW `cancelled` → cancelled in ShipStation if not shipped (emailed); already shipped →
+    email only. Any other TBW edit after we have it (lines, qty, ship-to, new file, notes) is
+    **emailed, never applied** — compared against `state.sent` (TBW's version when we created
+    it), not the ShipStation order, so staff edits in ShipStation don't read as TBW changes.
+  - A regular PO whose `TBW-<PO>` already exists without our orderKey (an old-form order) is
+    not created; staff get an email.
+- **Shipments**: TBW shipments in ShipStation from the last 30 days (voided included) for
+  orderKey-marked orders → `desired_shipments()` → reconciled with the TBW order's
+  `shipments` (ours have `shipment_id = ss-<ShipStation shipmentId>`). Always sends
+  `line_items` (TBW otherwise counts a shipment as everything unshipped). A label that adds
+  no new quantities (extra box of one shipment) is folded into the previous shipment:
+  tracking appended, cost summed. Voided label → `DELETE`. Cost = `shipmentCost × 1.2`.
+  TBW bills that cost on **their** weekly invoice.
+- **Staff emails** (`tbw.order_attention`, mugs@): cancel, edit-after-receipt, can't-create,
+  sync errors, TBW refusing a shipment (409: already invoiced / fully shipped). Each distinct
+  problem emails once (`state.alerted`).
+- **State**: Cloudinary raw JSON `tbw-portal/tbw_sync_state` — `since` cursor, `seen`,
+  `sent`, `alerted`, `ship_sig`. Losing it is safe (re-reads from 2026-10-01; ShipStation
+  orderKey prevents duplicates) apart from possibly one repeated alert per order.
+- **TBW as built vs our spec**: `test`, `replaces_order_id`, `unit_weight_oz`,
+  `box_label_page`, per-line file URLs are always null/false for now. Orders with unset TBW
+  product numbers are held back by TBW and appear later with a fresh `updated_at`. TBW's
+  `ship_to.company` is sometimes a person's name; we use `store_name` as the company.
+- Not handled: an order split in ShipStation into a new order number (its shipments carry
+  no tbw orderKey), or an order marked shipped without a label.
+
+## Old New Order form (still up)
+Kept running alongside the sync for now. **Duplicate risk**: if Tyler submits a PO here that
+also exists in TBW's dashboard, the sync won't create it when the form got there first (it
+emails mugs@ instead), but if the sync got there first the form will happily create a second
+`TBW-<PO>` order. Retire the form once TBW is fully on their dashboard.
 1. **Login** — single password (`PORTAL_PASSWORD`), session cookie.
 2. **New Order form** — PO number, 15oz qty, 11oz qty, file attachments (single page; JS-driven). A **Replacement Order** toggle swaps the qty fields for a mug/box breakdown — see "Replacement orders" below.
 3. **Preview** — sends *only the PO PDF* to `/parse_po` to read the ship-to address (no upload yet). Review shown inline.
@@ -38,6 +96,9 @@ A **Replacement Order** toggle on the New Order form (default off) covers Tyler 
 
 ## Invoices tab (`invoice.py` + routes in `app.py`)
 Weekly invoice tracker for The Buffalo Works, reconstructed from ShipStation.
+- **TBW dashboard orders are excluded** (`is_tbw_api_order()`, orderKey prefix): TBW invoices
+  those on their side from the shipping cost we send, so counting them here would double-bill.
+  Only old-form orders still land here, so the tab winds down to history.
 - **One invoice per week**, Saturday–Friday, bucketed by **ship date** (`ship_friday()` in `app.py`, changed 2026-07-10 from order date — orders that don't ship until a later week now land on that later week's invoice instead of being billed with $0 shipping on the week they were placed). Orders with no ship date yet (unshipped) don't belong to any week — they simply show up once they ship, even weeks later.
 - **A Friday ship date always rolls to the following week's invoice**, never its own (`ship_friday()`). ShipStation's `shipDate` is date-only (no time-of-day), so this applies uniformly to every Friday shipment regardless of what time it actually shipped — there's no data to distinguish "before the cutoff" from "after." Since this can push a same-day Friday shipment (e.g. `TBW-BLANKS` shipping today) into next week's bucket before that week's own natural Sat-Thu window has even started, `build_all_invoices()`'s internal computation window extends one week past `most_recent_friday()` so that bucket's total is captured (see `_week_visible` below for when it actually appears).
 - The current week only becomes the active invoice once Friday noon ET passes (`most_recent_friday()`, a real-time gate on when books close — unrelated to any individual order's date).
@@ -98,6 +159,7 @@ Silently skips (no exception, no blocked order) if `PRODUCTION_PORTAL_URL`/`PROD
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | file storage — the `hogg-outfitters` account, also in Keychain under these exact names (shared with `image-pipeline`), so scripts run locally can read/write this app's Cloudinary-hosted `invoice_state` JSON directly without Railway CLI access |
 | `PRODUCTION_PORTAL_URL` / `PRODUCTION_INGEST_TOKEN` | custom-order-portal's production dashboard push (optional — silently skipped if unset). `PRODUCTION_PORTAL_URL` must be the **bare Railway domain, no path** — the push code appends `/admin/production-orders` itself (see NOTES.md's 2026-07-22 incident for what happens if it isn't) |
 | `ANTHROPIC_API_KEY` | box-label vision matching |
+| `TBW_API_TOKEN` | TBW dashboard API bearer token — also in Keychain. TBW can revoke/reissue it |
 | `MATCH_MODEL` | vision model (set to `claude-haiku-4-5` — cheap, accurate for bold phrases) |
 | `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `NOTIFY_GMAIL_REFRESH_TOKEN` | Gmail OAuth2 for order notifications, read by `hogg_notify` |
 
