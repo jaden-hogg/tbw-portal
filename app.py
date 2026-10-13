@@ -121,14 +121,21 @@ def cloudinary_download(url: str) -> bytes:
 # ── ShipStation ───────────────────────────────────────────────────────────────
 
 def ss_get(path: str, params: dict | None = None) -> dict:
-    r = requests.get(
-        f"{SS_BASE}{path}",
-        auth=(SS_KEY, SS_SECRET),
-        params=params,
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
+    # The ShipStation rate limit is shared by every Hogg job on the account, so wait it out
+    # (same as ss_post) rather than failing the TBW sync whenever another job is busy.
+    for attempt in range(3):
+        r = requests.get(
+            f"{SS_BASE}{path}",
+            auth=(SS_KEY, SS_SECRET),
+            params=params,
+            timeout=30,
+        )
+        if r.status_code == 429 and attempt < 2:
+            time.sleep(int(r.headers.get("X-Rate-Limit-Reset", 60)) + 2)
+            continue
+        r.raise_for_status()
+        return r.json()
+    raise RuntimeError("unreachable")
 
 
 def ss_post(path: str, payload: dict) -> dict:
