@@ -36,8 +36,18 @@ set — removing the variable is the off switch. Test without writing anything: 
   - Every file is downloaded from TBW (links need the token) and re-uploaded to Cloudinary
     `TBW-Orders/PO-<...>/`; duplicate filenames skipped. The `box_label` file is expanded
     against the **mug lines only** (box labels are mug gift boxes).
+  - **Per-line files for the Production dashboard** (`design_files()`): TBW sends one
+    art-transfer PDF per order (one page per mug design) and a thumbnail sheet (one embedded
+    image per design, towels/totes included). Each art page → that mug line's **print file**
+    (PDF), each sheet image → that line's **mockup** (PNG, flattened onto white — PyMuPDF
+    returns these masked JPEGs opaque-black otherwise, so image + soft mask are joined by
+    hand in `_sheet_designs()`). Matched by phrase with `box_labels.match_images()`. Non-mug
+    lines get no print file (TBW sends none).
   - Then: ack to TBW (`POST /orders/{id}/ack`), `tbw.order_received` email, Production
-    dashboard push (`post_to_production_dashboard`, customer = TBW `store_name`).
+    dashboard push (`post_to_production_dashboard`, customer = TBW `store_name`, per-line
+    `mockup_url`/`print_file_url`, and `box_label_url` = the expanded box labels, shown under
+    Inputs → Box Labels). `refresh_production_files(portal, tbw_id)` re-pushes those for an
+    order that already exists.
   - TBW `cancelled` → cancelled in ShipStation if not shipped (emailed); already shipped →
     email only. Any other TBW edit after we have it (lines, qty, ship-to, new file, notes) is
     **emailed, never applied** — compared against `state.sent` (TBW's version when we created

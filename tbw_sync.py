@@ -35,10 +35,11 @@ import os
 import time
 from datetime import date, datetime, timedelta
 
+import fitz
 import requests
 
 import hogg_notify as notify
-from box_labels import expand_box_labels
+from box_labels import expand_box_labels, match_images
 
 TBW_API_BASE  = os.environ.get("TBW_API_BASE", "https://hoggapp.tbwbrands.com/api").rstrip("/")
 TBW_API_TOKEN = os.environ.get("TBW_API_TOKEN", "")
@@ -284,9 +285,121 @@ def pick_order_number(portal, tbw: dict) -> str | None:
     return None
 
 
+def _sheet_designs(pdf_bytes: bytes) -> list[bytes]:
+    """The product images on a TBW thumbnail sheet, one PNG per design. Each design is its
+    own embedded image; the TBW/brand logos sit in the header band at the top of the page."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pngs, seen = [], set()
+    for page in doc:
+        smasks = {img[0]: img[1] for img in page.get_images(full=True)}
+        for info in page.get_image_info(xrefs=True):
+            x0, y0, x1, y1 = info["bbox"]
+            xref = info.get("xref")
+            if not xref or xref in seen or y1 < 110 or (x1 - x0) * (y1 - y0) < 5000:
+                continue
+            seen.add(xref)
+            # Decode the image and its soft mask separately and join them: Pixmap(doc, xref)
+            # returns these images fully opaque, black where they should be transparent.
+            pix = fitz.Pixmap(doc.extract_image(xref)["image"])
+            if pix.alpha:
+                pix = fitz.Pixmap(pix, 0)
+            if pix.n > 3:
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+            if smasks.get(xref):
+                pix = fitz.Pixmap(pix, fitz.Pixmap(doc, smasks[xref]))
+                # Flatten onto white so the result looks the same everywhere it's shown.
+                flat = fitz.open()
+                pg = flat.new_page(width=pix.width, height=pix.height)
+                pg.insert_image(pg.rect, pixmap=pix)
+                pix = pg.get_pixmap(alpha=False)
+            while pix.width > 1200:
+                pix.shrink(1)
+            pngs.append(pix.tobytes("png"))
+    return pngs
+
+
+def design_files(tbw: dict, raw: dict[int, bytes]) -> tuple[dict[str, dict], list[str]]:
+    """Split TBW's per-order files into per-line files for the Production dashboard, whose
+    Products table shows a mockup and print file per line. Art transfers (mugs) are one page
+    per design → that line's print file; the thumbnail sheet has one image per design (mugs,
+    towels, ...) → that line's mockup. Pages/images are matched to lines by reading the
+    phrase, same as the box labels.
+    Returns ({line_id: {"print_file": (filename, bytes), "mockup": (filename, bytes)}}, warnings)."""
+    po = tbw["po_number"]
+    lines = tbw["line_items"]
+    mug_lines = [li for li in lines if li.get("mug_size")]
+    out: dict[str, dict] = {}
+    warnings: list[str] = []
+
+    for f in unique_files(tbw):
+        if f["id"] not in raw:
+            continue
+        if f["type"] in ("art_transfer", "print_file"):
+            targets = mug_lines if f["type"] == "art_transfer" else lines
+            if not targets:
+                continue
+            src = fitz.open(stream=raw[f["id"]], filetype="pdf")
+            pages = [src.load_page(i).get_pixmap(dpi=80).tobytes("png") for i in range(src.page_count)]
+            matches = match_images(pages, [li["description"] for li in targets],
+                                   subject="a mug print design")
+            by_line: dict[str, list[int]] = {}
+            for page_no, idx in enumerate(matches):
+                if idx >= 0:
+                    by_line.setdefault(str(targets[idx]["id"]), []).append(page_no)
+            for line_id, page_nos in by_line.items():
+                if "print_file" in out.get(line_id, {}):
+                    continue
+                doc = fitz.open()
+                for n in page_nos:
+                    doc.insert_pdf(src, from_page=n, to_page=n)
+                sku = next(li["sku"] for li in lines if str(li["id"]) == line_id)
+                out.setdefault(line_id, {})["print_file"] = (
+                    f"{po} Print File - {sku}.pdf", doc.tobytes(garbage=4, deflate=True))
+            if -1 in matches:
+                warnings.append(f"{f['filename']}: {matches.count(-1)} page(s) matched no line")
+        elif f["type"] == "thumbnail":
+            images = _sheet_designs(raw[f["id"]])
+            matches = match_images(images, [li["description"] for li in lines])
+            for png, idx in zip(images, matches):
+                if idx < 0:
+                    continue
+                line = lines[idx]
+                entry = out.setdefault(str(line["id"]), {})
+                entry.setdefault("mockup", (f"{po} Mockup - {line['sku']}.png", png))
+
+    for li in lines:
+        missing = [k.replace("_", " ") for k in ("print_file", "mockup")
+                   if k not in out.get(str(li["id"]), {})
+                   and not (k == "print_file" and not li.get("mug_size"))]
+        if missing:
+            warnings.append(f"{li['sku']}: no {' or '.join(missing)} found in TBW's files")
+    return out, warnings
+
+
+def upload_design_files(portal, designs: dict[str, dict], folder: str,
+                        dry_run: bool, save_to: str | None) -> dict[str, dict]:
+    """{line_id: {"print_file_url": ..., "mockup_url": ...}} — uploaded to Cloudinary, or in a
+    dry run written to `save_to` (if given) with the local path in place of a URL."""
+    urls: dict[str, dict] = {}
+    for line_id, files in designs.items():
+        for kind, (name, data) in files.items():
+            if dry_run:
+                where = "(not uploaded)"
+                if save_to:
+                    os.makedirs(save_to, exist_ok=True)
+                    where = os.path.join(save_to, name)
+                    with open(where, "wb") as fh:
+                        fh.write(data)
+                urls.setdefault(line_id, {})[f"{kind}_url"] = where
+            else:
+                urls.setdefault(line_id, {})[f"{kind}_url"] = portal.cloudinary_upload(data, name, folder)
+    return urls
+
+
 def copy_files(portal, tbw: dict, folder: str, dry_run: bool, labels_to: str | None):
-    """Copy every file to Cloudinary, expanding the box labels first.
-    Returns (file_urls [(name, url)], warnings)."""
+    """Copy every file to Cloudinary, expanding the box labels first, and split the art
+    transfers / thumbnail sheet into per-line print files and mockups.
+    Returns (file_urls [(name, url)], warnings, line_files {line_id: {...url}})."""
     files = unique_files(tbw)
     warnings: list[str] = []
     labels = [f for f in files if f["type"] == "box_label"]
@@ -300,8 +413,11 @@ def copy_files(portal, tbw: dict, folder: str, dry_run: bool, labels_to: str | N
     ]
 
     file_urls: list[tuple[str, str]] = []
+    raw: dict[int, bytes] = {}
     for f in files:
         data = tbw_file(f["url"])
+        if f["type"] in ("art_transfer", "print_file", "thumbnail"):
+            raw[f["id"]] = data
         if label and f["id"] == label["id"] and mug_lines:
             try:
                 data, pages, label_warnings = expand_box_labels(data, mug_lines)
@@ -322,7 +438,15 @@ def copy_files(portal, tbw: dict, folder: str, dry_run: bool, labels_to: str | N
             warnings.append(f"{f['filename']} couldn't be copied to Cloudinary ({e}); "
                             "open it from the TBW dashboard")
             file_urls.append((f["filename"], f["url"]))
-    return file_urls, warnings
+
+    line_files: dict[str, dict] = {}
+    try:
+        designs, design_warnings = design_files(tbw, raw)
+        warnings.extend(design_warnings)
+        line_files = upload_design_files(portal, designs, folder, dry_run, labels_to)
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"per-line mockups/print files failed: {e}")
+    return file_urls, warnings, line_files
 
 
 # ── Staff email ───────────────────────────────────────────────────────────────
@@ -360,7 +484,7 @@ def received_email(order_number: str, tbw: dict, warnings: list[str]) -> None:
         log(f"order email failed for {order_number}: {e}")
 
 
-def production_push(portal, order_number: str, tbw: dict, file_urls) -> None:
+def production_push(portal, order_number: str, tbw: dict, file_urls, line_files) -> None:
     def first(*types):
         return next((u for n, u in file_urls
                      for f in unique_files(tbw) if f["filename"] == n and f["type"] in types), None)
@@ -369,22 +493,50 @@ def production_push(portal, order_number: str, tbw: dict, file_urls) -> None:
     notes = f"PO {tbw['po_number']}"
     if tbw.get("notes"):
         notes += f"\n\n{tbw['notes']}"
+    payload = {
+        "source": "tbw",
+        "source_ref": order_number,
+        "customer_name": tbw.get("store_name") or "The Buffalo Works",
+        "order_date": tbw.get("order_date") or date.today().isoformat(),
+        "product_summary": ", ".join(f"{i['name']} x{i['quantity']}" for i in items),
+        # Per-line mockup/print file: the dashboard only falls back to the order-level files
+        # for single-line orders, and TBW orders are one line per design.
+        "line_items": [{"sku": i.get("sku"), "name": i["name"], "variant": None,
+                        "quantity": i["quantity"],
+                        "mockup_url": line_files.get(i["lineItemKey"], {}).get("mockup_url"),
+                        "print_file_url": line_files.get(i["lineItemKey"], {}).get("print_file_url")}
+                       for i in items],
+        "notes": notes,
+        "print_file_url": first("art_transfer", "print_file"),
+        "mockup_url": first("thumbnail"),
+        "box_label_url": first("box_label"),
+        "external_status": "awaiting_shipment",
+    }
     try:
-        portal.post_to_production_dashboard({
-            "source": "tbw",
-            "source_ref": order_number,
-            "customer_name": tbw.get("store_name") or "The Buffalo Works",
-            "order_date": tbw.get("order_date") or date.today().isoformat(),
-            "product_summary": ", ".join(f"{i['name']} x{i['quantity']}" for i in items),
-            "line_items": [{"sku": i.get("sku"), "name": i["name"], "variant": None,
-                            "quantity": i["quantity"]} for i in items],
-            "notes": notes,
-            "print_file_url": first("art_transfer", "print_file"),
-            "mockup_url": first("thumbnail"),
-            "external_status": "awaiting_shipment",
-        })
+        portal.post_to_production_dashboard(payload)
     except Exception as e:  # noqa: BLE001
         log(f"production push failed for {order_number}: {e}")
+
+
+def refresh_production_files(portal, tbw_id: int) -> None:
+    """Re-push an existing order's per-line mockups/print files and box labels to the
+    Production dashboard (for orders created before those were sent). The other files'
+    Cloudinary links are read back from the ShipStation notes, so only the art transfers
+    and thumbnail sheet are downloaded again."""
+    import re
+    tbw = tbw_order(tbw_id)
+    ss = find_ss_order(portal, tbw)
+    if not ss:
+        raise RuntimeError(f"PO {tbw['po_number']} isn't in ShipStation")
+    file_urls = re.findall(r"^(.+?)\n(https://\S+)$", ss.get("internalNotes") or "", re.M)
+    raw = {f["id"]: tbw_file(f["url"]) for f in unique_files(tbw)
+           if f["type"] in ("art_transfer", "print_file", "thumbnail")}
+    designs, warnings = design_files(tbw, raw)
+    folder = f"TBW-Orders/{ss['orderNumber'].replace('TBW-', 'PO-', 1)}"
+    line_files = upload_design_files(portal, designs, folder, False, None)
+    production_push(portal, ss["orderNumber"], tbw, file_urls, line_files)
+    log(f"{ss['orderNumber']}: production files refreshed ({len(line_files)} lines)"
+        + (f" | {warnings}" if warnings else ""))
 
 
 # ── Orders ────────────────────────────────────────────────────────────────────
@@ -490,7 +642,7 @@ def handle_order(portal, state: dict, tbw: dict, dry_run: bool, labels_to: str |
         return
 
     folder = f"TBW-Orders/{order_number.replace('TBW-', 'PO-', 1)}"
-    file_urls, warnings = copy_files(portal, tbw, folder, dry_run, labels_to)
+    file_urls, warnings, line_files = copy_files(portal, tbw, folder, dry_run, labels_to)
     payload = order_payload(portal, tbw, order_number, file_urls, warnings)
 
     if dry_run:
@@ -499,7 +651,8 @@ def handle_order(portal, state: dict, tbw: dict, dry_run: bool, labels_to: str |
         ship = payload["shipTo"]
         log(f"WOULD CREATE {order_number} | ship by {payload.get('shipByDate', '-')[:10]} | "
             f"{ship['name']} / {ship['company']}, {ship['city']} {ship['state']} | "
-            f"weight {payload.get('weight', {}).get('value', 'none')} oz | {items}"
+            f"weight {payload.get('weight', {}).get('value', 'none')} oz | {items} | "
+            f"per-line files: {len(line_files)}/{len(tbw['line_items'])}"
             + (f" | warnings: {warnings}" if warnings else ""))
         return
 
@@ -508,7 +661,7 @@ def handle_order(portal, state: dict, tbw: dict, dry_run: bool, labels_to: str |
     log(f"PO {po}: created {order_number} (ShipStation order {created.get('orderId')})")
     tbw_request("POST", f"/orders/{tbw['id']}/ack", json={"hogg_order_number": order_number})
     received_email(order_number, tbw, warnings)
-    production_push(portal, order_number, tbw, file_urls)
+    production_push(portal, order_number, tbw, file_urls, line_files)
     portal.invalidate_dashboard_cache()
 
 

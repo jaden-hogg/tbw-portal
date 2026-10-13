@@ -65,7 +65,8 @@ def parse_po_line_items(pdf_bytes: bytes) -> list[dict]:
     return items
 
 
-def _match_page(page_png: bytes, descriptions: list[str]) -> dict:
+def _match_page(page_png: bytes, descriptions: list[str],
+                subject: str = "a coffee mug / gift box design") -> dict:
     """Ask Claude which description best matches the phrase on this label image."""
     img_b64 = base64.standard_b64encode(page_png).decode()
     numbered = "\n".join(f"{idx}: {d}" for idx, d in enumerate(descriptions))
@@ -83,7 +84,7 @@ def _match_page(page_png: bytes, descriptions: list[str]) -> dict:
                 {
                     "type": "text",
                     "text": (
-                        "This image is a coffee mug / gift box design. Read the main phrase "
+                        f"This image is {subject}. Read the main phrase "
                         "printed on it. Then pick the single product description below whose "
                         "phrase matches it.\n\n"
                         f"Descriptions:\n{numbered}\n\n"
@@ -109,6 +110,24 @@ def _match_page(page_png: bytes, descriptions: list[str]) -> dict:
     )
     text = next(b.text for b in resp.content if b.type == "text")
     return json.loads(text)
+
+
+def match_images(images_png: list[bytes], descriptions: list[str],
+                 subject: str = "a product design (mug, towel, tote, shirt...)") -> list[int]:
+    """Index into `descriptions` for each image (-1 = no match). One description needs no
+    call: everything belongs to it."""
+    if len(descriptions) == 1:
+        return [0] * len(images_png)
+
+    def worker(png):
+        try:
+            idx = _match_page(png, descriptions, subject).get("index", -1)
+            return idx if 0 <= idx < len(descriptions) else -1
+        except Exception:  # noqa: BLE001
+            return -1
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        return list(ex.map(worker, images_png))
 
 
 def expand_box_labels(pdf_bytes: bytes, line_items: list[dict]) -> tuple[bytes, int, list[str]]:
