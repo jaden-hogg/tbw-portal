@@ -510,6 +510,7 @@ def production_push(portal, order_number: str, tbw: dict, file_urls, line_files)
         "print_file_url": first("art_transfer", "print_file"),
         "mockup_url": first("thumbnail"),
         "box_label_url": first("box_label"),
+        "packing_slip_url": first("packing_slip"),
         "external_status": "awaiting_shipment",
     }
     try:
