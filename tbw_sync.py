@@ -529,7 +529,8 @@ def refresh_production_files(portal, tbw_id: int) -> None:
     ss = find_ss_order(portal, tbw)
     if not ss:
         raise RuntimeError(f"PO {tbw['po_number']} isn't in ShipStation")
-    file_urls = re.findall(r"^(.+?)\n(https://\S+)$", ss.get("internalNotes") or "", re.M)
+    file_urls = [(n, re.sub(r"\.ai$", ".pdf", u) if n.lower().endswith(".pdf") else u)
+                 for n, u in re.findall(r"^(.+?)\n(https://\S+)$", ss.get("internalNotes") or "", re.M)]
     raw = {f["id"]: tbw_file(f["url"]) for f in unique_files(tbw)
            if f["type"] in ("art_transfer", "print_file", "thumbnail")}
     designs, warnings = design_files(tbw, raw)

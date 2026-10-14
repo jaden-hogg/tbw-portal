@@ -45,9 +45,12 @@ set — removing the variable is the off switch. Test without writing anything: 
     lines get no print file (TBW sends none).
   - Then: ack to TBW (`POST /orders/{id}/ack`), `tbw.order_received` email, Production
     dashboard push (`post_to_production_dashboard`, customer = TBW `store_name`, per-line
-    `mockup_url`/`print_file_url`, and `box_label_url` = the expanded box labels, shown under
-    Inputs → Box Labels). `refresh_production_files(portal, tbw_id)` re-pushes those for an
-    order that already exists.
+    `mockup_url`/`print_file_url`, `box_label_url` = the expanded box labels and
+    `packing_slip_url` = TBW's own packing slip, shown under Inputs → Packing Slip / Box
+    Labels). `refresh_production_files(portal, tbw_id)` re-pushes those for an order that
+    already exists.
+  - `cloudinary_upload()` returns `.pdf` for any PDF: Cloudinary files PDFs saved from
+    Illustrator (some TBW slips) as `.ai`, which browsers download instead of opening.
   - TBW `cancelled` → cancelled in ShipStation if not shipped (emailed); already shipped →
     email only. Any other TBW edit after we have it (lines, qty, ship-to, new file, notes) is
     **emailed, never applied** — compared against `state.sent` (TBW's version when we created

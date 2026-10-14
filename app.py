@@ -105,7 +105,13 @@ def cloudinary_upload(file_bytes: bytes, filename: str, folder: str) -> str:
             )
             if not resp.ok:
                 raise RuntimeError(f"Cloudinary {resp.status_code}: {resp.text[:300]}")
-            return resp.json()["secure_url"]
+            url = resp.json()["secure_url"]
+            # Cloudinary files a PDF saved from Illustrator as "ai" and serves it as
+            # application/illustrator, so browsers download it instead of opening it. The
+            # same asset at .pdf is the identical file served as application/pdf.
+            if filename.lower().endswith(".pdf"):
+                url = re.sub(r"\.[A-Za-z0-9]+$", ".pdf", url)
+            return url
         except (requests.exceptions.RequestException, RuntimeError) as e:
             last_err = e
             time.sleep(2)
