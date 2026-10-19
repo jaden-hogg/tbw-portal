@@ -318,6 +318,9 @@ EVENTS = {
         project="Amazon-Listing-Workstation",
         when="A new Amazon multipack needs its SKU + UPC (Ryan adds them in the Custom UPCs and SKUs "
              "sheet); the same thread gets a reply once they're in, with the SKUs to set up"),
+    "amazon.multipack_sent": dict(
+        sender="ops", audience="staff", to=[JADEN], project="Amazon-Listing-Workstation",
+        when="A multipack queued to send itself once Ryan's SKU/UPC came in: sent, or why it wasn't"),
     "amazon.panda_boom_weekly": dict(
         sender="ops", audience="staff", to=[JADEN, JEREMY],
         project="Amazon-Listing-Workstation",
