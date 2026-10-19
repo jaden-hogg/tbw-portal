@@ -8,6 +8,8 @@ come from here, so changing who gets something is a one-line edit followed by sy
 
 Fields:
   sender    "custom" -> from custom@customhoggtumblers.com  (anything custom-order related)
+            "custom_hogg" -> from custom@hoggoutfitters.com  (emails to Faire retailers)
+            "custom_tsd"  -> from custom@hoggoutfitters.com as "The Stainless Depot" (TSD Customize customers)
             "sales"  -> from sales@hoggoutfitters.com         (anything sales/wholesale)
             "ops"    -> from jaden@hoggoutfitters.com         (Amazon, FBA, credit, international)
   audience  "staff"    -> recipients are `to` below; the caller cannot add any
@@ -149,6 +151,56 @@ EVENTS = {
         sender="custom", audience="customer", to=None, project="custom-order-portal",
         when="An ordered job needs a better artwork file: the request, 2 follow-ups and a final warning"),
 
+    # --- custom-order-portal: Faire retailers (see FAIRE_CUSTOM.md) --------------------
+    # Sent to the order's Faire address (usually an @relay.faire.com proxy, which Faire
+    # forwards). One Gmail thread per order: every one of these replies onto the first.
+    "faire.customer.order_received": dict(
+        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        when="A custom Faire order arrives: thanks + their order page (asks for artwork, or "
+             "says the mockup is in progress or already approved)"),
+    "faire.customer.artwork_reminder": dict(
+        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        when="Days 1, 2, 3 and 5 after the order while there is still no artwork"),
+    "faire.customer.proof_ready": dict(
+        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        when="A proof is sent (Send & mark mockup complete)"),
+    "faire.customer.approval_reminder": dict(
+        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        when="24h after a proof with no approval"),
+    "faire.customer.auto_approved": dict(
+        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        when="48h after that nudge: the proof is approved for them and goes to production"),
+    "faire.customer.chat_message": dict(
+        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        when="Staff sent a message in the chat on the retailer's order page"),
+    "faire.customer.cancelled": dict(
+        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        when="Staff cancel a placed order from its day-7 no-artwork row: cancelled for inactivity"),
+
+    # --- custom-order-portal: TSD Customize customers (TSD_CUSTOMIZE.md, the email flow) -
+    # One Gmail thread per order, like Faire's.
+    "tsd.customer.order_received": dict(
+        sender="custom_tsd", audience="customer", to=None, project="custom-order-portal",
+        when="A paid TSD custom order is pulled in: thanks + their proof page (asks for artwork if none came)"),
+    "tsd.customer.artwork_reminder": dict(
+        sender="custom_tsd", audience="customer", to=None, project="custom-order-portal",
+        when="Days 1, 2, 3 and 5 with no artwork (day 5 warns we'll cancel)"),
+    "tsd.customer.cancelled": dict(
+        sender="custom_tsd", audience="customer", to=None, project="custom-order-portal",
+        when="Day 7 with no artwork: cancelling for inactivity, they can place a new order"),
+    "tsd.customer.proof_ready": dict(
+        sender="custom_tsd", audience="customer", to=None, project="custom-order-portal",
+        when="A proof is sent (Send & mark mockup complete)"),
+    "tsd.customer.approval_reminder": dict(
+        sender="custom_tsd", audience="customer", to=None, project="custom-order-portal",
+        when="24h after a proof with no approval"),
+    "tsd.customer.auto_approved": dict(
+        sender="custom_tsd", audience="customer", to=None, project="custom-order-portal",
+        when="48h after that nudge: approved for them, into production"),
+    "tsd.customer.chat_message": dict(
+        sender="custom_tsd", audience="customer", to=None, project="custom-order-portal",
+        when="Staff sent a message in the chat on the customer's proof page"),
+
     # --- custom-order-portal: ops -----------------------------------------------------
     "portal.fba_batch": dict(
         sender="ops", audience="staff", to=[VIP, JASONK, JADEN],
@@ -177,6 +229,16 @@ EVENTS = {
         sender="custom", audience="staff", to=[JADEN, DARYL, HIEP, JASONK, JEREMY],
         project="faire-fulfillment-sync",
         when="A custom order is held in ShipStation so it can't ship undecorated"),
+    # Replies on that email's thread for a TSD order still without artwork, so the same people
+    # see it (Jaden, 2026-10-16). Sent by custom-order-portal (services/prepaid_flow.py).
+    "tsd.no_artwork_call": dict(
+        sender="custom", audience="staff", to=[JADEN, DARYL, HIEP, JASONK, JEREMY],
+        project="custom-order-portal",
+        when="Day 4 with no artwork on a TSD order: call the customer (or email them, with no phone)"),
+    "tsd.no_artwork_cancel": dict(
+        sender="custom", audience="staff", to=[JADEN, DARYL, HIEP, JASONK, JEREMY],
+        project="custom-order-portal",
+        when="Day 7 with no artwork on a TSD order: reach out once more, or cancel it"),
     "faire.watched_collection": dict(
         sender="custom", audience="staff", to=[JADEN, DARYL, HIEP, JASONK],
         project="faire-fulfillment-sync", when="A Faire order includes a watched-collection SKU"),
@@ -251,6 +313,15 @@ EVENTS = {
     "amazon.intraday_products": dict(
         sender="ops", audience="staff", to=[JADEN, JEREMY],
         project="amazon-daily-report", when="Amazon products sold today so far, every 3 hours 9am–9pm CT"),
+    "amazon.multipack_request": dict(
+        sender="ops", audience="staff", to=["ryan@hoggoutfitters.com", JIM, "zach@hoggoutfitters.com"],
+        project="Amazon-Listing-Workstation",
+        when="A new Amazon multipack needs its SKU + UPC (Ryan adds them in the Custom UPCs and SKUs "
+             "sheet); the same thread gets a reply once they're in, with the SKUs to set up"),
+    "amazon.panda_boom_weekly": dict(
+        sender="ops", audience="staff", to=[JADEN, JEREMY],
+        project="Amazon-Listing-Workstation",
+        when="Weekly (Mon 10am CT): Panda Boom ASINs' search rank, term clicks/purchases and sales"),
     "shipstation.credit_alert": dict(
         sender="ops", audience="staff", to=[JADEN, JEREMY],
         project="shipstation-tools", when="A net-terms customer placed an order (credit tracker)"),
