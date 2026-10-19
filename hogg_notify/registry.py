@@ -321,6 +321,10 @@ EVENTS = {
     "amazon.multipack_sent": dict(
         sender="ops", audience="staff", to=[JADEN], project="Amazon-Listing-Workstation",
         when="A multipack queued to send itself once Ryan's SKU/UPC came in: sent, or why it wasn't"),
+    "amazon.listing_watch": dict(
+        sender="ops", audience="staff", to=[JADEN], project="Amazon-Listing-Workstation",
+        when="A watched Amazon listing reached what it was watched for (e.g. its product type changed), "
+             "stopped being buyable, or the watch ran out"),
     "amazon.panda_boom_weekly": dict(
         sender="ops", audience="staff", to=[JADEN, JEREMY],
         project="Amazon-Listing-Workstation",
