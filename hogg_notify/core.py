@@ -35,6 +35,15 @@ GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
 SENDERS = {
     "custom": dict(from_addr=formataddr(("Hogg Custom", "custom@customhoggtumblers.com")),
                    list_id="<staff.customhoggtumblers.com>"),
+    # Faire retailers (FAIRE_CUSTOM.md in custom-order-portal), from jaden@ itself. Faire's
+    # relay addresses (@relay.faire.com) dropped every email sent as custom@hoggoutfitters.com
+    # without a bounce, while mail from jaden@ — the address on our Faire account — reached
+    # the retailer (2026-10-20). No Reply-To: replies come back to jaden@.
+    "faire": dict(from_addr=formataddr(("Hogg Outfitters", "jaden@hoggoutfitters.com")),
+                  list_id="<staff.hoggoutfitters.com>"),
+    # TSD Customize customers (TSD_CUSTOMIZE.md): the same inbox, under the store they bought from.
+    "custom_tsd": dict(from_addr=formataddr(("The Stainless Depot", "custom@hoggoutfitters.com")),
+                       list_id="<staff.hoggoutfitters.com>"),
     "sales": dict(from_addr=formataddr(("Hogg Outfitters", "sales@hoggoutfitters.com")),
                   list_id="<staff.hoggoutfitters.com>"),
     "ops": dict(from_addr="jaden@hoggoutfitters.com", list_id="<ops.hoggoutfitters.com>"),

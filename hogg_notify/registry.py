@@ -8,7 +8,7 @@ come from here, so changing who gets something is a one-line edit followed by sy
 
 Fields:
   sender    "custom" -> from custom@customhoggtumblers.com  (anything custom-order related)
-            "custom_hogg" -> from custom@hoggoutfitters.com  (emails to Faire retailers)
+            "faire"  -> from jaden@hoggoutfitters.com as "Hogg Outfitters" (emails to Faire retailers)
             "custom_tsd"  -> from custom@hoggoutfitters.com as "The Stainless Depot" (TSD Customize customers)
             "sales"  -> from sales@hoggoutfitters.com         (anything sales/wholesale)
             "ops"    -> from jaden@hoggoutfitters.com         (Amazon, FBA, credit, international)
@@ -153,28 +153,29 @@ EVENTS = {
 
     # --- custom-order-portal: Faire retailers (see FAIRE_CUSTOM.md) --------------------
     # Sent to the order's Faire address (usually an @relay.faire.com proxy, which Faire
-    # forwards). One Gmail thread per order: every one of these replies onto the first.
+    # forwards only from jaden@ — see SENDERS["faire"]). One Gmail thread per order: every one
+    # of these replies onto the first.
     "faire.customer.order_received": dict(
-        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        sender="faire", audience="customer", to=None, project="custom-order-portal",
         when="A custom Faire order arrives: thanks + their order page (asks for artwork, or "
              "says the mockup is in progress or already approved)"),
     "faire.customer.artwork_reminder": dict(
-        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        sender="faire", audience="customer", to=None, project="custom-order-portal",
         when="Days 1, 2, 3 and 5 after the order while there is still no artwork"),
     "faire.customer.proof_ready": dict(
-        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        sender="faire", audience="customer", to=None, project="custom-order-portal",
         when="A proof is sent (Send & mark mockup complete)"),
     "faire.customer.approval_reminder": dict(
-        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        sender="faire", audience="customer", to=None, project="custom-order-portal",
         when="24h after a proof with no approval"),
     "faire.customer.auto_approved": dict(
-        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        sender="faire", audience="customer", to=None, project="custom-order-portal",
         when="48h after that nudge: the proof is approved for them and goes to production"),
     "faire.customer.chat_message": dict(
-        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        sender="faire", audience="customer", to=None, project="custom-order-portal",
         when="Staff sent a message in the chat on the retailer's order page"),
     "faire.customer.cancelled": dict(
-        sender="custom_hogg", audience="customer", to=None, project="custom-order-portal",
+        sender="faire", audience="customer", to=None, project="custom-order-portal",
         when="Staff cancel a placed order from its day-7 no-artwork row: cancelled for inactivity"),
 
     # --- custom-order-portal: TSD Customize customers (TSD_CUSTOMIZE.md, the email flow) -
