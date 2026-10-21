@@ -79,19 +79,12 @@ EVENTS = {
     "faire.artwork_reminder": dict(
         sender="custom", audience="staff", to=[SUPPORT, JADEN],
         project="custom-order-portal",
-        when="Every 24h while a paid Faire order still has no artwork"),
-    "faire.artwork_final": dict(
-        sender="custom", audience="staff", to=[SUPPORT, JADEN],
-        project="custom-order-portal",
-        when="7 days with no artwork: the quote is closed and the Faire order needs cancelling"),
+        when="Daily for a week, then weekly, while a paid Faire order still has no artwork "
+             "(at 30 days it goes on the Faire Custom tab to confirm cancelling)"),
     "faire.preorder_artwork_reminder": dict(
         sender="custom", audience="staff", to=[JADEN, JEREMY],
         project="custom-order-portal",
-        when="Every 24h while a Faire pre-order still has no artwork"),
-    "faire.preorder_artwork_final": dict(
-        sender="custom", audience="staff", to=[JADEN, JEREMY],
-        project="custom-order-portal",
-        when="7 days with no artwork on a pre-order: the request is closed"),
+        when="Daily for a week, then weekly, while a Faire pre-order still has no artwork"),
 
     "faire.preorder_proof_ready": dict(
         sender="custom", audience="staff", to=[JADEN, JEREMY],
